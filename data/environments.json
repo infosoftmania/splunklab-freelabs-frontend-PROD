@@ -1,0 +1,23 @@
+{
+  "linux_jenkins": {
+    "label": "Project-1: End-to-end monitoring solution for NovaTech Industries using Splunk",
+    "codebuild_projects": [
+      "Linux",
+      "Jenkins",
+      "OpenVPN",
+      "Syslog-ng",
+      "Windows"
+    ],
+    "requiredVpcs": 8
+  },
+  "openvpn_syslog": {
+    "label": "Linux",
+    "codebuild_projects": ["Linux"],
+    "requiredVpcs": 2
+  },
+  "windows_dns": {
+    "label": "Windows, Jenkins",
+    "codebuild_projects": ["Windows", "Jenkins"],
+    "requiredVpcs": 4
+  }
+}
