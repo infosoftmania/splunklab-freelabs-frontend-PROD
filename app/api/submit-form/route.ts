@@ -27,30 +27,42 @@ export async function POST(req: Request) {
       );
     }
 
-    const BASE_API_URL = process.env.AWS_LABS_API_URL;
+    const response = await fetch(
+      'https://wkn4icbie8.execute-api.us-east-1.amazonaws.com/freelabs',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'PROVISION',
+          user_name,
+          key_pair_name,
+          region,
+          aws_access_key,
+          aws_secret_key,
+          codebuild_projects,
+        }),
+      }
+    );
 
-    if (!BASE_API_URL) {
-      return NextResponse.json(
-        { success: false, message: 'AWS_LABS_API_URL is not configured' },
-        { status: 500 }
-      );
+    const responseText = await response.text();
+    let data: unknown = responseText;
+
+    try {
+      data = responseText ? JSON.parse(responseText) : null;
+    } catch {
+      // Preserve non-JSON upstream responses for diagnostics.
     }
 
-    const API_URL = `${BASE_API_URL}/free-labs`;
-
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
-
-    const data = await response.json();
+    const upstreamMessage =
+      typeof data === 'object' && data !== null && 'message' in data
+        ? String(data.message)
+        : undefined;
 
     if (!response.ok) {
       return NextResponse.json(
         {
           success: false,
-          message: data?.message || 'Upstream API failed',
+          message: upstreamMessage || 'Provisioning API request failed',
         },
         { status: response.status }
       );

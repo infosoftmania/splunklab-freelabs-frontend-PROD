@@ -10,6 +10,11 @@
     ],
     "requiredVpcs": 8
   },
+  "project_5": {
+    "label": "Project-5: Unified Observability Initiative using Splunk",
+    "codebuild_projects": ["project 5"],
+    "requiredVpcs": 8
+  },
   "openvpn_syslog": {
     "label": "Linux",
     "codebuild_projects": ["Linux"],
