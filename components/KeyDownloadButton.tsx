@@ -65,6 +65,11 @@ export default function KeyDownloadButton({
         a.remove();
         window.URL.revokeObjectURL(url);
 
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('freelabs_pem_key', data.keyMaterial);
+          sessionStorage.setItem('freelabs_pem_filename', `${keyPairName}.pem`);
+        }
+
         setMessage(`Key pair "${keyPairName}" created and downloaded successfully`);
         setSuccess(true);
       } else {
