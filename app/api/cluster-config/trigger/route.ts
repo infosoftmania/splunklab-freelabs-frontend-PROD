@@ -13,21 +13,30 @@ const API_URL = (
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { instances, ssh_user } = body || {};
+    const isFreeLabs = Boolean(body?.servers && body?.pem_key);
+    const endpoint = isFreeLabs ? `${API_URL}/free-labs/cluster-config` : `${API_URL}/cluster-config`;
 
-    if (!instances || !Array.isArray(instances) || instances.length === 0 || !ssh_user) {
-      return NextResponse.json(
-        { error: 'instances and ssh_user are required fields' },
-        { status: 400 },
-      );
+    if (!isFreeLabs) {
+      const { instances, ssh_user } = body || {};
+      if (!instances || !Array.isArray(instances) || instances.length === 0 || !ssh_user) {
+        return NextResponse.json(
+          { error: 'servers (or instances) and ssh_user/pem_key are required fields' },
+          { status: 400 },
+        );
+      }
     }
+
+    const email = request.headers.get('x-user-email') || body?.email || '';
+    const username = body?.username || (email ? email.split('@')[0] : 'student');
 
     const token =
       request.cookies.get('access_token')?.value ||
       request.cookies.get('token')?.value ||
+      request.cookies.get('google_token')?.value ||
+      request.cookies.get('refresh_token')?.value ||
       request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');
 
-    if (!token && !request.cookies.get('refresh_token')?.value) {
+    if (!token && !email) {
       return NextResponse.json(
         { error: 'Unauthorized. Please sign in with Google to proceed.' },
         { status: 401 },
@@ -41,7 +50,6 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const email = request.headers.get('x-user-email');
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: 'application/json',
@@ -50,13 +58,33 @@ export async function POST(request: NextRequest) {
       headers['x-user-email'] = email;
     }
 
+    const triggerPayload: Record<string, unknown> = isFreeLabs
+      ? {
+          servers: body.servers,
+          ssh_user: body.ssh_user || 'ec2-user',
+          email,
+          username,
+          pem_key: body.pem_key,
+          splunk_username: body.splunk_username || 'admin',
+          splunk_password: body.splunk_password || 'admin123',
+          origin: body.origin || 'freelabs',
+          plan_start_date: body.plan_start_date || new Date().toISOString(),
+        }
+      : {
+          instances: body.instances,
+          ssh_user: body.ssh_user,
+          email,
+          username,
+          ...(body?.plan_start_date ? { plan_start_date: body.plan_start_date } : {}),
+        };
+
     const { response, refreshSetCookies } = await authenticatedBackendFetch(
       request,
-      `${API_URL}/cluster-config`,
+      endpoint,
       {
         method: 'POST',
         headers,
-        body: JSON.stringify({ instances, ssh_user }),
+        body: JSON.stringify(triggerPayload),
         cache: 'no-store',
       },
     );

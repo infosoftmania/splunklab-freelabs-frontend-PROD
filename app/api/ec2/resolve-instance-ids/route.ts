@@ -1,5 +1,6 @@
-﻿import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { authenticatedBackendFetch } from '@/lib/authenticated-backend-fetch';
+import { EC2Client, DescribeInstancesCommand } from '@aws-sdk/client-ec2';
 
 export const dynamic = 'force-dynamic';
 
@@ -126,6 +127,16 @@ function collectInstances(raw: any): any[] {
     results.push(raw);
   }
 
+  // Unpack stringified JSON body if present
+  if (typeof raw.body === 'string') {
+    try {
+      const parsedBody = JSON.parse(raw.body);
+      results.push(...collectInstances(parsedBody));
+    } catch {
+      // ignore parse error
+    }
+  }
+
   if (Array.isArray(raw.instances)) results.push(...collectInstances(raw.instances));
   if (Array.isArray(raw.Instances)) results.push(...collectInstances(raw.Instances));
   if (Array.isArray(raw.data)) results.push(...collectInstances(raw.data));
@@ -157,25 +168,16 @@ export async function POST(request: NextRequest) {
 
     const token =
       request.cookies.get('access_token')?.value ||
-      request.cookies.get('token')?.value;
+      request.cookies.get('token')?.value ||
+      request.cookies.get('google_token')?.value ||
+      request.cookies.get('refresh_token')?.value ||
+      request.headers.get('authorization');
 
-    if (!token && !request.cookies.get('refresh_token')?.value) {
+    if (!token && !requestedEmail) {
       return NextResponse.json(
         { error: 'Unauthorized. Please sign in with Google to proceed.' },
         { status: 401 },
       );
-    }
-
-    if (!API_URL) {
-      return NextResponse.json({ error: 'Backend API URL is not configured' }, { status: 500 });
-    }
-
-    const reqHeaders: Record<string, string> = {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    };
-    if (requestedEmail) {
-      reqHeaders['x-user-email'] = requestedEmail;
     }
 
     const mapping: Record<string, string> = {};
@@ -191,8 +193,65 @@ export async function POST(request: NextRequest) {
 
     const hasAllIps = () => publicIps.every((ip) => Boolean(mapping[ip]));
 
-    // Step 1: Query main user instances endpoint (/instances)
+    // Step 1: Direct AWS EC2 resolution (fastest, queries the active AWS account directly)
     try {
+      const primaryRegion = body?.region || process.env.AWS_REGION || 'us-east-1';
+      const regionsToQuery = [primaryRegion, ...AWS_REGIONS.filter((r) => r !== primaryRegion)];
+
+      for (const reg of regionsToQuery) {
+        if (hasAllIps()) break;
+        try {
+          const clientConfig: {
+            region: string;
+            credentials?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
+          } = {
+            region: reg,
+          };
+
+          if (body?.aws_access_key && body?.aws_secret_key) {
+            clientConfig.credentials = {
+              accessKeyId: String(body.aws_access_key).trim(),
+              secretAccessKey: String(body.aws_secret_key).trim(),
+              sessionToken: body.aws_session_token ? String(body.aws_session_token).trim() : undefined,
+            };
+          }
+
+          const ec2Client = new EC2Client(clientConfig);
+          const ec2Res = await ec2Client.send(
+            new DescribeInstancesCommand({
+              Filters: [
+                {
+                  Name: 'instance-state-name',
+                  Values: ['pending', 'running', 'stopped', 'stopping'],
+                },
+              ],
+            }),
+          );
+
+          for (const res of ec2Res.Reservations || []) {
+            for (const inst of res.Instances || []) {
+              recordInstance(inst);
+            }
+          }
+        } catch {
+          // Continue checking next region or fallbacks
+        }
+      }
+    } catch (ec2Err) {
+      console.warn('Direct EC2 describe error:', ec2Err);
+    }
+
+    const reqHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (requestedEmail) {
+      reqHeaders['x-user-email'] = requestedEmail;
+    }
+
+    // Step 2: Fallback to main user instances endpoint (/instances)
+    if (!hasAllIps() && API_URL) {
+      try {
       const { response, refreshSetCookies } = await authenticatedBackendFetch(
         request,
         `${API_URL}/instances`,
@@ -214,9 +273,10 @@ export async function POST(request: NextRequest) {
     } catch (err) {
       console.warn('Failed to query /instances endpoint:', err);
     }
+    }
 
-    // Step 2: If still missing IPs, query /ec2/instances across all common regions in parallel
-    if (!hasAllIps()) {
+    // Step 3: If still missing IPs, query /ec2/instances across all common regions in parallel
+    if (!hasAllIps() && API_URL) {
       const regionPromises = AWS_REGIONS.map(async (region) => {
         try {
           const { response, refreshSetCookies } = await authenticatedBackendFetch(
@@ -245,8 +305,8 @@ export async function POST(request: NextRequest) {
       await Promise.allSettled(regionPromises);
     }
 
-    // Step 3: If still missing IPs, query /provisioning-status fallback
-    if (!hasAllIps()) {
+    // Step 4: If still missing IPs, query /provisioning-status fallback
+    if (!hasAllIps() && API_URL) {
       try {
         const { response, refreshSetCookies } = await authenticatedBackendFetch(
           request,

@@ -88,6 +88,7 @@ export async function POST(req: NextRequest) {
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
       path: '/',
+      maxAge: 30 * 24 * 3600,
     });
 
     // Forward backend auth cookies (access_token, refresh_token, session_id, etc.)
@@ -116,6 +117,7 @@ export async function POST(req: NextRequest) {
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
+        maxAge: 86400, // 24 hours fallback so access token doesn't prematurely die
       };
 
       for (const attribute of attributes) {
@@ -123,13 +125,45 @@ export async function POST(req: NextRequest) {
         if (key.toLowerCase() === 'max-age' && attributeValue) {
           const parsedMaxAge = Number(attributeValue);
           if (Number.isFinite(parsedMaxAge)) {
-            cookieOptions.maxAge = parsedMaxAge;
+            cookieOptions.maxAge = Math.max(parsedMaxAge, 86400);
           }
         }
       }
 
       cookieOptions.path = '/';
       nextResponse.cookies.set(name.trim(), value, cookieOptions);
+    }
+
+    // Direct fallback from response JSON body
+    if (typeof data === 'object' && data !== null) {
+      const rawData = data as Record<string, unknown>;
+      const directCookieOpts = {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'lax' as const,
+        path: '/',
+        maxAge: 86400 * 30,
+      };
+
+      if (typeof rawData.access_token === 'string' && rawData.access_token) {
+        nextResponse.cookies.set('access_token', rawData.access_token, {
+          ...directCookieOpts,
+          maxAge: 86400,
+        });
+        nextResponse.cookies.set('token', rawData.access_token, {
+          ...directCookieOpts,
+          maxAge: 86400,
+        });
+      }
+      if (typeof rawData.refresh_token === 'string' && rawData.refresh_token) {
+        nextResponse.cookies.set('refresh_token', rawData.refresh_token, directCookieOpts);
+      }
+      if (typeof rawData.session_id === 'string' && rawData.session_id) {
+        nextResponse.cookies.set('session_id', rawData.session_id, directCookieOpts);
+      }
+      if (typeof rawData.session_token === 'string' && rawData.session_token) {
+        nextResponse.cookies.set('session_token', rawData.session_token, directCookieOpts);
+      }
     }
 
     return nextResponse;

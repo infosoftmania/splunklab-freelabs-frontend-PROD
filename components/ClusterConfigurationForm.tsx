@@ -25,6 +25,7 @@ type ProgressStep =
   | 'validating'
   | 'splunk'
   | 'license'
+  | 'key'
   | 'triggering'
   | 'configuring'
   | 'completed'
@@ -72,6 +73,12 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
   const [progressStep, setProgressStep] = useState<ProgressStep>('idle');
   const [licenseInstallReady, setLicenseInstallReady] = useState(false);
 
+  // In-memory PEM key state (Zero-storage, never stored in S3)
+  const [pemKeyContent, setPemKeyContent] = useState<string>('');
+  const [pemKeyFileName, setPemKeyFileName] = useState<string>('');
+  const [pemSource, setPemSource] = useState<'session' | 'uploaded' | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Auth state
   const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
   const [userEmail, setUserEmail] = useState<string>('');
@@ -80,29 +87,67 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
 
   const googleBtnContainerRef = useRef<HTMLDivElement>(null);
 
-  // Check auth state on mount
+  // Check auth state & session PEM on mount
   useEffect(() => {
     let active = true;
+    const savedEmail = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_user_email') : null;
+    if (savedEmail) {
+      setIsAuthenticated(true);
+      setUserEmail(savedEmail);
+    }
+
+    // Auto-detect PEM key if downloaded in current browser session
+    const sessionPem = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_pem_key') : null;
+    const sessionPemName = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_pem_filename') : null;
+    if (sessionPem && !pemKeyContent) {
+      setPemKeyContent(sessionPem);
+      setPemKeyFileName(sessionPemName || 'session-key.pem');
+      setPemSource('session');
+    }
+
     fetch('/api/auth/profile')
       .then((res) => res.json())
       .then((data) => {
         if (!active) return;
         if (data.authenticated) {
           setIsAuthenticated(true);
-          const email = data.user?.email || data.user?.email_id || '';
+          const email = data.user?.email || data.user?.email_id || savedEmail || '';
           setUserEmail(email);
-        } else {
+          if (email) sessionStorage.setItem('freelabs_user_email', email);
+        } else if (!savedEmail) {
           setIsAuthenticated(false);
         }
       })
       .catch(() => {
-        if (active) setIsAuthenticated(false);
+        if (active && !savedEmail) setIsAuthenticated(false);
       });
 
     return () => {
       active = false;
     };
-  }, []);
+  }, [pemKeyContent]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const content = (event.target?.result as string) || '';
+      if (!content.includes('-----BEGIN') || !content.includes('PRIVATE KEY-----')) {
+        setErrorMessage('Invalid file format. Please select a valid private key (.pem) starting with -----BEGIN ... PRIVATE KEY-----.');
+        return;
+      }
+      setPemKeyContent(content.trim());
+      setPemKeyFileName(file.name);
+      setPemSource('uploaded');
+      setErrorMessage('');
+    };
+    reader.onerror = () => {
+      setErrorMessage('Failed to read the key file. Please try again.');
+    };
+    reader.readAsText(file);
+  };
 
   const handleGoogleSuccess = async (response: { credential?: string }) => {
     const idToken = response.credential;
@@ -124,9 +169,12 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
       }
 
       setIsAuthenticated(true);
-      const user = data?.user || data?.profile || data;
+      const user = data?.user || data?.profile || data?.google_profile || data;
       const email = user?.email || user?.email_id || '';
-      setUserEmail(email);
+      if (email) {
+        setUserEmail(email);
+        sessionStorage.setItem('freelabs_user_email', email);
+      }
     } catch (err) {
       console.error('Google Sign-In error:', err);
       setErrorMessage(err instanceof Error ? err.message : 'Google authentication failed');
@@ -227,6 +275,9 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
       await fetch('/api/logout', { method: 'POST' });
     } catch {
       // ignore
+    }
+    if (typeof window !== 'undefined') {
+      sessionStorage.removeItem('freelabs_user_email');
     }
     setIsAuthenticated(false);
     setUserEmail('');
@@ -375,51 +426,20 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
         );
       }
 
-      // 4. Resolve Public IPs → EC2 InstanceIds
+      // 4. Verify EC2 Private Key (.pem)
+      if (!pemKeyContent) {
+        setProgressStep('key');
+        throw new Error('EC2 Private Key (.pem) is required. Please upload your .pem file before continuing.');
+      }
+
+      setProgressStep('key');
+      setStatusMessage('Verifying EC2 private key in memory...');
+
+      // 5. Trigger Cluster Configuration via FreeLabs Lambda
       setProgressStep('triggering');
-      setStatusMessage('Resolving EC2 instance IDs...');
+      setStatusMessage('Triggering Cluster Configuration via FreeLabs Lambda...');
 
-      const resolveResponse = await fetch('/api/ec2/resolve-instance-ids', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(userEmail ? { 'x-user-email': userEmail } : {}),
-        },
-        body: JSON.stringify({
-          publicIps: allPublicIps,
-          email: userEmail,
-        }),
-      });
-
-      const resolveData = await resolveResponse.json();
-
-      if (resolveResponse.status === 401) {
-        setIsAuthenticated(false);
-        throw new Error('Authentication required. Please sign in with Google to proceed.');
-      }
-
-      if (!resolveResponse.ok) {
-        throw new Error(
-          resolveData?.error || 'Failed to resolve EC2 instance IDs from the backend.',
-        );
-      }
-
-      const mapping: Record<string, string> = resolveData?.mapping || {};
-      const unresolved: string[] = resolveData?.unresolved || [];
-
-      if (unresolved.length > 0) {
-        throw new Error(
-          `Could not find EC2 InstanceId for the following Public IP${unresolved.length > 1 ? 's' : ''}: ` +
-            unresolved.join(', ') +
-            '. Ensure these instances exist and are visible to the configured AWS account.',
-        );
-      }
-
-      // Build the ordered list of InstanceIds matching SERVER_NAMES order
-      const instanceIds = allPublicIps.map((ip) => mapping[ip]);
-
-      // 5. Trigger Cluster Configuration
-      setStatusMessage('Triggering Cluster Configuration...');
+      const planStartDate = new Date().toISOString();
 
       const triggerResponse = await fetch('/api/cluster-config/trigger', {
         method: 'POST',
@@ -428,114 +448,116 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
           ...(userEmail ? { 'x-user-email': userEmail } : {}),
         },
         body: JSON.stringify({
-          instances: instanceIds,
+          servers: trimmedIps,
           ssh_user: 'ec2-user',
+          email: userEmail,
+          username: userEmail ? userEmail.split('@')[0] : 'student',
+          pem_key: pemKeyContent,
+          splunk_username: 'admin',
+          splunk_password: 'admin123',
+          origin: 'freelabs',
+          plan_start_date: planStartDate,
         }),
       });
 
-      const triggerData = await triggerResponse.json();
+      const triggerData = await triggerResponse.json().catch(() => ({}));
 
       if (triggerResponse.status === 401) {
-        setIsAuthenticated(false);
         throw new Error('Authentication required. Please click "Sign in with Google" to proceed.');
+      }
+
+      if (triggerData.status === 'SPLUNK_VALIDATION_FAILED') {
+        throw new Error(`Splunk port 8000 validation failed: ${triggerData.message}`);
+      }
+
+      if (triggerData.status === 'LICENSE_VALIDATION_FAILED') {
+        setLicenseInstallReady(true);
+        throw new Error(triggerData.message || 'Splunk Enterprise license validation failed on Management_server.');
       }
 
       if (!triggerResponse.ok || (triggerData.status && triggerData.status === 'error')) {
         throw new Error(triggerData?.error || triggerData?.message || 'Failed to trigger cluster configuration.');
       }
 
-      // 5. Poll Cluster Configuration Status
+      const buildId = triggerData.build_id;
+
+      // 6. Poll Cluster Configuration Status (1 min interval, up to 45 minutes)
       setProgressStep('configuring');
-      setStatusMessage('Cluster configuration in progress. Waiting for completion...');
+      setStatusMessage('Cluster configuration initiated. Monitoring CodeBuild execution...');
 
       let completed = false;
-      for (let attempt = 0; attempt < 45; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 3000));
+      const startTime = Date.now();
+      const MAX_ATTEMPTS = 45; // 45 attempts * 60s = 45 minutes
 
-        // Check cluster-config status
+      // Quick initial check at 15s to capture initial build phase
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+
+      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const elapsedMin = Math.floor(elapsedSec / 60);
+        const secRemainder = elapsedSec % 60;
+        const timeFormatted = elapsedMin > 0 ? `${elapsedMin}m ${secRemainder}s` : `${elapsedSec}s`;
+
         try {
-          const clusterStatusRes = await fetch(
-            `/api/cluster-config/status${userEmail ? `?email=${encodeURIComponent(userEmail)}` : ''}`,
-            {
-              headers: userEmail ? { 'x-user-email': userEmail } : {},
-              cache: 'no-store',
-            },
-          );
+          const statusUrl = buildId
+            ? `/api/cluster-config/status?build_id=${encodeURIComponent(buildId)}`
+            : `/api/cluster-config/status${userEmail ? `?email=${encodeURIComponent(userEmail)}` : ''}`;
+
+          const clusterStatusRes = await fetch(statusUrl, {
+            headers: userEmail ? { 'x-user-email': userEmail } : {},
+            cache: 'no-store',
+          });
           const clusterStatusData = await clusterStatusRes.json();
           if (clusterStatusRes.ok) {
-            const records = Array.isArray(clusterStatusData)
-              ? clusterStatusData
-              : clusterStatusData?.records || [];
+            const rawStatus = (clusterStatusData.status || clusterStatusData.Status || '').toUpperCase();
+            const phase = clusterStatusData.current_phase || clusterStatusData.phase || '';
 
-            const isDone = records.some((record: { status?: string; Status?: string }) => {
-              const st = (record.status || record.Status || '').toLowerCase();
-              return st === 'completed' || st === 'success' || st === 'succeeded';
-            });
-            if (isDone) {
+            if (rawStatus) {
+              setStatusMessage(
+                `Cluster configuration running (${timeFormatted}) — Status: ${rawStatus} (Phase: ${phase || 'IN_PROGRESS'}). Next check in 1 min...`
+              );
+            }
+
+            if (rawStatus === 'SUCCEEDED' || rawStatus === 'COMPLETED' || rawStatus === 'SUCCESS') {
               completed = true;
               break;
             }
-
-            const isFailed = records.some((record: { status?: string; Status?: string }) => {
-              const st = (record.status || record.Status || '').toLowerCase();
-              return st === 'failed' || st === 'error';
-            });
-            if (isFailed) {
-              throw new Error('Cluster configuration provisioning failed.');
+            if (rawStatus === 'FAILED' || rawStatus === 'ERROR' || rawStatus === 'FAULT' || rawStatus === 'STOPPED') {
+              throw new Error(`Cluster configuration failed with status: ${rawStatus}. Check CodeBuild logs for details.`);
             }
           }
         } catch (err) {
-          if (err instanceof Error && err.message.includes('provisioning failed')) {
+          if (err instanceof Error && err.message.includes('Cluster configuration failed')) {
             throw err;
           }
         }
 
-        // Check pro-status fallback
-        try {
-          const proStatusRes = await fetch(
-            `/api/pro-status${userEmail ? `?email=${encodeURIComponent(userEmail)}` : ''}`,
-            {
-              headers: userEmail ? { 'x-user-email': userEmail } : {},
-              cache: 'no-store',
-            },
-          );
-          const proStatusData = await proStatusRes.json();
-          if (proStatusRes.ok) {
-            const records = Array.isArray(proStatusData)
-              ? proStatusData
-              : proStatusData?.records || [];
-
-            const isDone = records.some((record: { status?: string; Status?: string }) => {
-              const st = (record.status || record.Status || '').toLowerCase();
-              return st === 'completed' || st === 'success' || st === 'succeeded';
-            });
-            if (isDone) {
-              completed = true;
-              break;
-            }
-
-            const isFailed = records.some((record: { status?: string; Status?: string }) => {
-              const st = (record.status || record.Status || '').toLowerCase();
-              return st === 'failed' || st === 'error';
-            });
-            if (isFailed) {
-              throw new Error('Cluster configuration provisioning failed.');
-            }
-          }
-        } catch (err) {
-          if (err instanceof Error && err.message.includes('provisioning failed')) {
-            throw err;
-          }
+        if (attempt === MAX_ATTEMPTS - 1 && !completed) {
+          throw new Error('Timed out waiting for cluster configuration to finish (45 minutes exceeded).');
         }
 
-        if (attempt === 44 && !completed) {
-          throw new Error('Timed out waiting for cluster configuration to finish.');
+        // Wait 60s before next status API call, while updating UI clock every 5s
+        for (let waitTick = 0; waitTick < 12; waitTick += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 5000));
+          const currentElapsedSec = Math.floor((Date.now() - startTime) / 1000);
+          const curMin = Math.floor(currentElapsedSec / 60);
+          const curSec = currentElapsedSec % 60;
+          const curFormatted = curMin > 0 ? `${curMin}m ${curSec}s` : `${currentElapsedSec}s`;
+          setStatusMessage((prev) => {
+            if (!prev || !prev.includes('Cluster configuration running')) return prev;
+            return prev.replace(/\([^)]*\)/, `(${curFormatted})`);
+          });
         }
       }
 
+      const totalElapsedSec = Math.floor((Date.now() - startTime) / 1000);
+      const totalMin = Math.floor(totalElapsedSec / 60);
+      const totalSecRemainder = totalElapsedSec % 60;
+      const totalTimeFormatted = totalMin > 0 ? `${totalMin}m ${totalSecRemainder}s` : `${totalElapsedSec}s`;
+
       setProgressStep('completed');
       setStatusMessage('');
-      setSuccessMessage('Cluster configuration completed successfully!');
+      setSuccessMessage(`Cluster configuration completed successfully in ${totalTimeFormatted}! All 9 servers configured.`);
     } catch (error) {
       setProgressStep('failed');
       setStatusMessage('');
@@ -546,9 +568,10 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
   };
 
   const progressStepsList = [
-    { label: 'IP Format & Uniqueness Validation', active: progressStep === 'validating', done: ['splunk', 'license', 'triggering', 'configuring', 'completed'].includes(progressStep) },
-    { label: 'Splunk Accessibility (Port 8000)', active: progressStep === 'splunk', done: ['license', 'triggering', 'configuring', 'completed'].includes(progressStep) },
-    { label: 'Splunk License Verification', active: progressStep === 'license', done: ['triggering', 'configuring', 'completed'].includes(progressStep) },
+    { label: 'IP Format & Uniqueness Validation', active: progressStep === 'validating', done: ['splunk', 'license', 'key', 'triggering', 'configuring', 'completed'].includes(progressStep) },
+    { label: 'Splunk Accessibility (Port 8000)', active: progressStep === 'splunk', done: ['license', 'key', 'triggering', 'configuring', 'completed'].includes(progressStep) },
+    { label: 'Splunk License Verification', active: progressStep === 'license', done: ['key', 'triggering', 'configuring', 'completed'].includes(progressStep) },
+    { label: 'EC2 Private Key (.pem) Verification', active: progressStep === 'key', done: ['triggering', 'configuring', 'completed'].includes(progressStep) },
     { label: 'Triggering Cluster Setup', active: progressStep === 'triggering', done: ['configuring', 'completed'].includes(progressStep) },
     { label: 'Cluster Configuration Execution', active: progressStep === 'configuring', done: progressStep === 'completed' },
   ];
@@ -695,6 +718,69 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
           </div>
         </div>
 
+        {/* EC2 Private Key (.pem) Upload Card */}
+        <div className="mt-5 rounded-lg border border-gray-200 bg-gray-50/70 p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-gray-900">
+                  EC2 Private Key (.pem)
+                </h3>
+                {pemKeyContent ? (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[11px] font-semibold text-green-800">
+                    <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                    </svg>
+                    Key loaded in memory
+                  </span>
+                ) : (
+                  <span className="rounded bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+                    Required for Ansible
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-xs text-gray-600">
+                Upload the <code className="bg-gray-200/70 px-1 py-0.5 rounded text-gray-800 font-mono text-[11px]">.pem</code> key downloaded during environment setup. Used directly in-memory and never stored in S3.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pem,.cer,.key,text/plain"
+                onChange={handleFileUpload}
+                disabled={working}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={working}
+                className="inline-flex items-center gap-1.5 rounded-md bg-white border border-gray-300 px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-xs hover:bg-gray-50 focus:outline-hidden focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+              >
+                <svg className="h-3.5 w-3.5 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                </svg>
+                <span>{pemKeyFileName ? 'Change .pem File' : 'Select .pem File'}</span>
+              </button>
+            </div>
+          </div>
+
+          {pemKeyFileName && (
+            <div className="mt-2.5 flex items-center gap-2 text-xs text-gray-700">
+              <span className="font-medium text-gray-500">Selected file:</span>
+              <span className="font-semibold text-gray-900 bg-white border border-gray-200 px-2 py-0.5 rounded text-[11px] font-mono">
+                {pemKeyFileName}
+              </span>
+              {pemSource === 'session' && (
+                <span className="text-[11px] text-blue-700 font-medium">
+                  (Auto-detected from current session)
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+
         {licenseInstallReady && (
           <div className="mt-5 rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950 shadow-xs">
             <div className="flex items-center justify-between gap-3">
@@ -830,6 +916,8 @@ export default function ClusterConfigurationForm({ onClose }: Props) {
               ? 'Processing...'
               : licenseInstallReady
               ? 'Validate License & Continue'
+              : !pemKeyContent
+              ? 'Select .pem Key & Continue'
               : 'Validate Servers & Continue'}
           </button>
         </div>

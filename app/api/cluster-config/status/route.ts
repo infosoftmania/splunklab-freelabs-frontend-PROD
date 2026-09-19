@@ -10,8 +10,36 @@ const API_URL = (
   ''
 ).replace(/\/+$/, '');
 
+const CODEBUILD_STATUS_URL = (
+  process.env.FREELABS_CODEBUILD_STATUS_API_URL ||
+  process.env.NEXT_PUBLIC_FREELABS_CODEBUILD_STATUS_API_URL ||
+  (API_URL ? `${API_URL}/free-labs/codebuild-status` : '')
+).replace(/\/+$/, '');
+
 export async function GET(request: NextRequest) {
   try {
+    const buildId = request.nextUrl.searchParams.get('build_id');
+
+    // Secure status fetch via API Gateway for FreeLabs
+    if (buildId && CODEBUILD_STATUS_URL) {
+      try {
+        const targetUrl = new URL(CODEBUILD_STATUS_URL);
+        targetUrl.searchParams.set('build_id', buildId);
+
+        const statusResponse = await fetch(targetUrl.toString(), {
+          headers: { Accept: 'application/json' },
+          cache: 'no-store',
+        });
+
+        if (statusResponse.ok) {
+          const data = await statusResponse.json();
+          return NextResponse.json(data);
+        }
+      } catch (err) {
+        console.warn('Backend codebuild-status fetch failed, trying fallback:', err);
+      }
+    }
+
     if (!API_URL) {
       return NextResponse.json(
         { error: 'Backend API URL is not configured' },
