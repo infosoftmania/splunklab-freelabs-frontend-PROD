@@ -814,6 +814,7 @@ const handleGroupChange = (
       {isClusterConfigurationOpen && (
         <ClusterConfigurationForm
           onClose={() => setIsClusterConfigurationOpen(false)}
+          provisionedServers={provisionedServers}
         />
       )}
     </>

@@ -525,7 +525,10 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
       {/* Cluster Configuration Modal */}
       {isClusterConfigOpen && (
-        <ClusterConfigurationForm onClose={() => setIsClusterConfigOpen(false)} />
+        <ClusterConfigurationForm
+          onClose={() => setIsClusterConfigOpen(false)}
+          provisionedServers={provisionedServers}
+        />
       )}
 
       {/* STEP 1: AWS Credentials Input */}
