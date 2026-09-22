@@ -18,6 +18,7 @@ type ServerName = (typeof SERVER_NAMES)[number];
 
 type Props = {
   onClose: () => void;
+  provisionedServers?: Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string } > | null;
 };
 
 type ProgressStep =
@@ -62,10 +63,29 @@ function loadGoogleIdentityScript(): Promise<void> {
   });
 }
 
-export default function ClusterConfigurationForm({ onClose }: Props) {
+export default function ClusterConfigurationForm({ onClose, provisionedServers }: Props) {
   const [publicIps, setPublicIps] = useState<Record<ServerName, string>>(() =>
     Object.fromEntries(SERVER_NAMES.map((name) => [name, ''])) as Record<ServerName, string>
   );
+
+  useEffect(() => {
+    if (!provisionedServers) return;
+
+    setPublicIps((prev) => {
+      const updated = { ...prev };
+      let hasChanges = false;
+      for (const name of SERVER_NAMES) {
+        const pubIp = provisionedServers[name]?.public_ip;
+        if (pubIp && typeof pubIp === 'string') {
+          if (updated[name] !== pubIp) {
+            updated[name] = pubIp;
+            hasChanges = true;
+          }
+        }
+      }
+      return hasChanges ? updated : prev;
+    });
+  }, [provisionedServers]);
   const [working, setWorking] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
