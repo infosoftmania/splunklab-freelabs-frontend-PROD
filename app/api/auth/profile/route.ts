@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
     if (!BACKEND_URL || !accessToken) {
       // If auth URL is not configured or using google_token directly
       return NextResponse.json(
-        { authenticated: true, user: fallbackUser },
+        { authenticated: true, user: fallbackUser, token: activeToken },
         { status: 200 },
       );
     }
@@ -66,7 +66,7 @@ export async function GET(request: NextRequest) {
       if (response.ok) {
         const data = await response.json();
         const nextResponse = NextResponse.json(
-          { authenticated: true, user: data?.user || data?.profile || fallbackUser },
+          { authenticated: true, user: data?.user || data?.profile || fallbackUser, token: activeToken },
           { status: 200 },
         );
 
@@ -83,7 +83,7 @@ export async function GET(request: NextRequest) {
     // If backend profile endpoint returned 404 or other non-OK status,
     // preserve authentication using the verified token payload
     return NextResponse.json(
-      { authenticated: true, user: fallbackUser },
+      { authenticated: true, user: fallbackUser, token: activeToken },
       { status: 200 },
     );
   } catch (error) {
