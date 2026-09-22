@@ -7,6 +7,16 @@ import ClusterConfigurationForm from './ClusterConfigurationForm';
 import environments from '../data/environments.json';
 import awsRegions from '../data/awsRegions.json';
 
+type AdminFormData = {
+  aws_access_key: string;
+  aws_secret_key: string;
+  region: string;
+  key_pair_name: string;
+  user_email: string;
+  user_name: string;
+  codebuild_projects: string[];
+};
+
 export default function AwsForm() {
   const [selectedGroup, setSelectedGroup] = useState('project_5');
   const [awsValid, setAwsValid] = useState<boolean | null>(null);
@@ -45,15 +55,31 @@ export default function AwsForm() {
   const [provisionedServers, setProvisionedServers] = useState<Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string }> | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const [formData, setFormData] = useState({
-    aws_access_key: '',
-    aws_secret_key: '',
-    region: '',
-    key_pair_name: '',
-    user_email: '',
-    user_name: '',
-    codebuild_projects: ['project 5'] as string[],
+  const [formData, setFormData] = useState<AdminFormData>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('admin_aws_form_data');
+      if (saved) {
+        try {
+          return JSON.parse(saved) as AdminFormData;
+        } catch {}
+      }
+    }
+    return {
+      aws_access_key: '',
+      aws_secret_key: '',
+      region: '',
+      key_pair_name: '',
+      user_email: '',
+      user_name: '',
+      codebuild_projects: ['project 5'] as string[],
+    };
   });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('admin_aws_form_data', JSON.stringify(formData));
+    }
+  }, [formData]);
 
   const codebuildGroupOptions = Object.entries(environments).map(
   ([key, value]) => ({
