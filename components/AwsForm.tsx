@@ -55,31 +55,15 @@ export default function AwsForm() {
   const [provisionedServers, setProvisionedServers] = useState<Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string }> | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  const [formData, setFormData] = useState<AdminFormData>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('admin_aws_form_data');
-      if (saved) {
-        try {
-          return JSON.parse(saved) as AdminFormData;
-        } catch {}
-      }
-    }
-    return {
-      aws_access_key: '',
-      aws_secret_key: '',
-      region: '',
-      key_pair_name: '',
-      user_email: '',
-      user_name: '',
-      codebuild_projects: ['project 5'] as string[],
-    };
-  });
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('admin_aws_form_data', JSON.stringify(formData));
-    }
-  }, [formData]);
+  const [formData, setFormData] = useState<AdminFormData>(() => ({
+    aws_access_key: '',
+    aws_secret_key: '',
+    region: '',
+    key_pair_name: '',
+    user_email: '',
+    user_name: '',
+    codebuild_projects: ['project 5'] as string[],
+  }));
 
   const codebuildGroupOptions = Object.entries(environments).map(
   ([key, value]) => ({
@@ -122,49 +106,53 @@ export default function AwsForm() {
   };
 
   // -------------------------
-  // Region change -> fetch key pairs
   // -------------------------
- const handleRegionChange = async (
-  e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
-) => {
-  const region = e.target.value;
+  // Fetch key pairs helper
+  // -------------------------
+  const fetchKeyPairsForRegion = async (reg: string) => {
+    if (!formData.aws_access_key || !formData.aws_secret_key || !reg) return;
 
-  setFormData(prev => ({
-    ...prev,
-    region,
-    key_pair_name: '',
-  }));
+    setKeyPairsLoading(true);
+    try {
+      const res = await fetch('/api/list-keypairs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aws_access_key: formData.aws_access_key.trim(),
+          aws_secret_key: formData.aws_secret_key.trim(),
+          region: reg,
+        }),
+      });
+      const data = await res.json();
 
-  setKeyPairsList([]);
-  setShowDropdown(false);
-  setKeyPairMessage('');
-  setKeyPairValid(null);
-
-  if (!formData.aws_access_key || !formData.aws_secret_key) return;
-
-  setKeyPairsLoading(true);
-
-  try {
-    const res = await fetch('/api/list-keypairs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        aws_access_key: formData.aws_access_key,
-        aws_secret_key: formData.aws_secret_key,
-        region,
-      }),
-    });
-    const data = await res.json();
-
-    if (data.success) {
-      setKeyPairsList(data.keyPairs || []);
+      if (data.success && Array.isArray(data.keyPairs)) {
+        setKeyPairsList(data.keyPairs);
+      }
+    } catch (err) {
+      console.error('Failed to fetch key pairs', err);
+    } finally {
+      setKeyPairsLoading(false);
     }
-  } catch (err) {
-    console.error('Failed to fetch key pairs', err);
-  } finally {
-    setKeyPairsLoading(false);
-  }
-};
+  };
+
+  const handleRegionChange = async (
+    e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
+  ) => {
+    const region = e.target.value;
+
+    setFormData(prev => ({
+      ...prev,
+      region,
+      key_pair_name: '',
+    }));
+
+    setKeyPairsList([]);
+    setShowDropdown(false);
+    setKeyPairMessage('');
+    setKeyPairValid(null);
+
+    fetchKeyPairsForRegion(region);
+  };
 
 
 const handleGroupChange = (
@@ -189,7 +177,7 @@ const handleGroupChange = (
   // Validate AWS Access Key & Secret Key
   // -------------------------
   const validateAws = async () => {
-    if (!formData.aws_access_key || !formData.aws_secret_key) return;
+    if (!formData.aws_access_key.trim() || !formData.aws_secret_key.trim()) return;
 
     setIsValidating(true);
     setAwsAccessMessage('');
@@ -201,27 +189,32 @@ const handleGroupChange = (
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          aws_access_key: formData.aws_access_key,
-          aws_secret_key: formData.aws_secret_key,
+          aws_access_key: formData.aws_access_key.trim(),
+          aws_secret_key: formData.aws_secret_key.trim(),
+          region: formData.region || 'us-east-1',
         }),
       });
 
       const data = await res.json();
+      const isValid = Boolean(data.awsValid ?? data.success ?? data.valid_account);
 
-      if (data.awsValid) {
+      if (isValid) {
         setAwsAccessMessage('AWS Access Key is valid');
         setAwsSecretMessage('AWS Secret Key is valid');
+        setAwsValid(true);
+        if (formData.region) {
+          fetchKeyPairsForRegion(formData.region);
+        }
       } else {
-        setAwsAccessMessage('Invalid AWS Access Key');
-        setAwsSecretMessage('Invalid AWS Secret Key');
+        const errorMsg = data.message || 'Invalid AWS credentials';
+        setAwsAccessMessage(errorMsg);
+        setAwsSecretMessage(errorMsg);
+        setAwsValid(false);
       }
-
-      setAwsValid(data.awsValid);
-
     } catch (err) {
       console.error(err);
-      setAwsAccessMessage('Error validating AWS Access Key');
-      setAwsSecretMessage('Error validating AWS Secret Key');
+      setAwsAccessMessage('Error validating AWS credentials');
+      setAwsSecretMessage('Error validating AWS credentials');
       setAwsValid(false);
     } finally {
       setIsValidating(false);

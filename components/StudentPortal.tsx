@@ -19,71 +19,29 @@ type Props = {
 };
 
 export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props) {
-  // Step 1: AWS Credentials (persisted across refreshes)
-  const [awsAccessKey, setAwsAccessKey] = useState(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_aws_ak') || '' : '';
-  });
-  const [awsSecretKey, setAwsSecretKey] = useState(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_aws_sk') || '' : '';
-  });
+  // Step 1: AWS Credentials (held in component memory only)
+  const [awsAccessKey, setAwsAccessKey] = useState('');
+  const [awsSecretKey, setAwsSecretKey] = useState('');
   const [isValidatingCreds, setIsValidatingCreds] = useState(false);
-  const [credValidationStatus, setCredValidationStatus] = useState<'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu'>(() => {
-    return (typeof window !== 'undefined' ? (sessionStorage.getItem('freelabs_cred_status') as any) : null) || 'idle';
-  });
+  const [credValidationStatus, setCredValidationStatus] = useState<'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
-  const [successBadge, setSuccessBadge] = useState(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_success_badge') || '' : '';
-  });
-  const [quotaDetails, setQuotaDetails] = useState<{ available_vcpus?: number; region?: string; total_quota?: number } | null>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('freelabs_quota_details');
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch {}
-      }
-    }
-    return null;
-  });
+  const [successBadge, setSuccessBadge] = useState('');
+  const [quotaDetails, setQuotaDetails] = useState<{ available_vcpus?: number; region?: string; total_quota?: number; permission_denied?: boolean } | null>(null);
 
   // Step 2: Unlocked Details (Dynamic single region with >= 36 vCPUs)
-  const [targetRegion, setTargetRegion] = useState(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_target_region') || 'us-east-1' : 'us-east-1';
-  });
-  const [keyPairName, setKeyPairName] = useState(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_key_pair') || '' : '';
-  });
+  const [targetRegion, setTargetRegion] = useState('us-east-1');
+  const [keyPairName, setKeyPairName] = useState('');
   const [keyPairsList, setKeyPairsList] = useState<string[]>([]);
   const [keyPairsLoading, setKeyPairsLoading] = useState(false);
-  const [userName, setUserName] = useState(() => {
-    return typeof window !== 'undefined'
-      ? sessionStorage.getItem('freelabs_user_name') || user.name || user.email.split('@')[0] || 'student'
-      : user.name || user.email.split('@')[0] || 'student';
-  });
+  const [userName, setUserName] = useState(() => user.name || user.email.split('@')[0] || 'student');
 
   // Step 3: Provisioning & Polling
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [activeLabId, setActiveLabId] = useState<string | null>(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_active_lab_id') || null : null;
-  });
-  const [setupState, setSetupState] = useState<'idle' | 'in_progress' | 'completed' | 'error'>(() => {
-    return (typeof window !== 'undefined' ? (sessionStorage.getItem('freelabs_setup_state') as any) : null) || 'idle';
-  });
+  const [activeLabId, setActiveLabId] = useState<string | null>(null);
+  const [setupState, setSetupState] = useState<'idle' | 'in_progress' | 'completed' | 'error'>('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [liveStatusText, setLiveStatusText] = useState(() => {
-    return typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_live_status') || '' : '';
-  });
-  const [provisionedServers, setProvisionedServers] = useState<Record<string, any> | null>(() => {
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('freelabs_provisioned_servers');
-      if (saved) {
-        try {
-          return JSON.parse(saved);
-        } catch {}
-      }
-    }
-    return null;
-  });
+  const [liveStatusText, setLiveStatusText] = useState('');
+  const [provisionedServers, setProvisionedServers] = useState<Record<string, any> | null>(null);
   const [isClusterConfigOpen, setIsClusterConfigOpen] = useState(false);
   const [terminateLoading, setTerminateLoading] = useState(false);
   const [terminateMessage, setTerminateMessage] = useState('');
@@ -92,69 +50,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // If credentials were valid on previous load, immediately fetch key pairs for targetRegion
-    const savedStatus = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_cred_status') : null;
-    const savedAk = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_aws_ak') : null;
-    const savedSk = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_aws_sk') : null;
-    const savedRegion = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_target_region') || 'us-east-1' : 'us-east-1';
-
-    if (savedStatus === 'valid' && savedAk && savedSk) {
-      fetchKeyPairs(savedAk, savedSk, savedRegion);
-    }
-
-    // If lab provisioning was in progress, resume polling
-    const savedLabId = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_active_lab_id') : null;
-    const savedSetupState = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_setup_state') : null;
-    if (savedSetupState === 'in_progress' && savedLabId) {
-      startPollingStatus(savedLabId);
-    }
-
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
   }, []);
-
-  // Sync inputs to sessionStorage so refresh never clears typed data
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (awsAccessKey) {
-        sessionStorage.setItem('freelabs_aws_ak', awsAccessKey);
-      } else {
-        sessionStorage.removeItem('freelabs_aws_ak');
-      }
-    }
-  }, [awsAccessKey]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (awsSecretKey) {
-        sessionStorage.setItem('freelabs_aws_sk', awsSecretKey);
-      } else {
-        sessionStorage.removeItem('freelabs_aws_sk');
-      }
-    }
-  }, [awsSecretKey]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (keyPairName) {
-        sessionStorage.setItem('freelabs_key_pair', keyPairName);
-      } else {
-        sessionStorage.removeItem('freelabs_key_pair');
-      }
-    }
-  }, [keyPairName]);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      if (userName) {
-        sessionStorage.setItem('freelabs_user_name', userName);
-      } else {
-        sessionStorage.removeItem('freelabs_user_name');
-      }
-    }
-  }, [userName]);
 
   const stopAllIntervals = () => {
     if (pollIntervalRef.current) {
@@ -183,10 +83,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
     setSuccessBadge('');
     setCredValidationStatus('idle');
 
-    const storedToken =
-      user.token ||
-      (typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_google_token') : '') ||
-      '';
+    const storedToken = user.token || '';
 
     try {
       const res = await fetch('/api/validate-aws-cred', {
@@ -208,9 +105,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
       if (!data.valid_account) {
         setCredValidationStatus('invalid_account');
         setErrorMessage(data.message || 'Invalid AWS Credentials. Account not found or inactive.');
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem('freelabs_cred_status', 'invalid_account');
-        }
         return;
       }
 
@@ -220,13 +114,10 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
           available_vcpus: data.available_vcpus,
           region: data.region || targetRegion,
           total_quota: data.total_quota,
+          permission_denied: Boolean(data.permission_denied),
         };
         setQuotaDetails(quotaInfo);
         setErrorMessage(data.message || `Insufficient vCPU Quota: Found ${data.available_vcpus ?? 0} vCPUs in ${targetRegion}. At least 36 vCPUs in one region are required. Please request an increase up to 36+ vCPUs in AWS Service Quotas.`);
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem('freelabs_cred_status', 'insufficient_vcpu');
-          sessionStorage.setItem('freelabs_quota_details', JSON.stringify(quotaInfo));
-        }
         return;
       }
 
@@ -243,13 +134,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
       setCredValidationStatus('valid');
       setQuotaDetails(verifiedQuota);
       setSuccessBadge(badge);
-
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('freelabs_cred_status', 'valid');
-        sessionStorage.setItem('freelabs_target_region', verifiedRegion);
-        sessionStorage.setItem('freelabs_success_badge', badge);
-        sessionStorage.setItem('freelabs_quota_details', JSON.stringify(verifiedQuota));
-      }
 
       // Fetch Key Pairs for the verified region
       fetchKeyPairs(awsAccessKey.trim(), awsSecretKey.trim(), verifiedRegion);
@@ -310,10 +194,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
     const labId = `freelab_${Math.floor(Date.now() / 1000)}`;
     setActiveLabId(labId);
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('freelabs_active_lab_id', labId);
-      sessionStorage.setItem('freelabs_setup_state', 'in_progress');
-    }
 
     startPollingStatus(labId);
 
@@ -342,10 +222,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
           setProvisionedServers(servers);
           setSetupState('completed');
           setIsSubmitting(false);
-          if (typeof window !== 'undefined') {
-            sessionStorage.setItem('freelabs_setup_state', 'completed');
-            sessionStorage.setItem('freelabs_provisioned_servers', JSON.stringify(servers));
-          }
         }
         return;
       }
@@ -355,9 +231,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         setSetupState('error');
         setIsSubmitting(false);
         setErrorMessage(`❌ ${data.message || 'Provisioning request failed'}`);
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem('freelabs_setup_state', 'error');
-        }
       }
     } catch (err) {
       console.warn('[LAUNCH-LAB] Continuing status polling:', err);
@@ -373,11 +246,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
     const initialStatus = 'Initiating 16 servers in us-east-1 on AWS...';
     setLiveStatusText(initialStatus);
     setSetupState('in_progress');
-    if (typeof window !== 'undefined') {
-      sessionStorage.setItem('freelabs_active_lab_id', labId);
-      sessionStorage.setItem('freelabs_setup_state', 'in_progress');
-      sessionStorage.setItem('freelabs_live_status', initialStatus);
-    }
 
     timerIntervalRef.current = setInterval(() => {
       setElapsedSeconds((prev) => prev + 1);
@@ -412,19 +280,12 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
           const statusMsg = `${serverCount}/16 servers created in us-east-1 (${readyWithIps} ready with Public IPs)...`;
           setLiveStatusText(statusMsg);
-          if (typeof window !== 'undefined') {
-            sessionStorage.setItem('freelabs_live_status', statusMsg);
-          }
 
           if (serverCount >= 16 && readyWithIps >= 16) {
             stopAllIntervals();
             setProvisionedServers(servers);
             setSetupState('completed');
             setIsSubmitting(false);
-            if (typeof window !== 'undefined') {
-              sessionStorage.setItem('freelabs_setup_state', 'completed');
-              sessionStorage.setItem('freelabs_provisioned_servers', JSON.stringify(servers));
-            }
           }
         }
       } catch (err) {
@@ -436,9 +297,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         setIsSubmitting(false);
         const timeoutMsg = 'Provisioning is taking longer than expected. Please check your AWS EC2 Console.';
         setLiveStatusText(timeoutMsg);
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem('freelabs_live_status', timeoutMsg);
-        }
       }
     };
 
@@ -478,12 +336,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         setProvisionedServers(null);
         setSetupState('idle');
         setTerminateMessage('✅ All lab servers have been terminated successfully.');
-        if (typeof window !== 'undefined') {
-          sessionStorage.removeItem('freelabs_provisioned_servers');
-          sessionStorage.setItem('freelabs_setup_state', 'idle');
-          sessionStorage.removeItem('freelabs_active_lab_id');
-          sessionStorage.removeItem('freelabs_live_status');
-        }
       } else {
         setTerminateMessage(`❌ Failed to terminate: ${data.message || 'Error'}`);
       }
@@ -602,23 +454,46 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
       {credValidationStatus === 'insufficient_vcpu' && (
         <div className="mt-4 p-4 bg-red-50 border-2 border-red-300 rounded-xl text-left">
-          <p className="text-sm font-extrabold text-red-700 flex items-center gap-1.5">
-            <span>❌ Insufficient vCPU Quota</span>
-          </p>
-          <p className="text-xs text-red-700 mt-1.5 leading-relaxed">
-            Your AWS account in <strong className="underline">{quotaDetails?.region || 'us-east-1'}</strong> currently has{' '}
-            <strong className="text-red-900 bg-red-100 px-1 py-0.5 rounded">{quotaDetails?.available_vcpus ?? 0} vCPUs</strong> available.
-          </p>
-          <p className="text-xs text-red-800 font-semibold mt-2">
-            ⚠️ You need at least <strong>36 vCPUs</strong> in a single region to launch FreeLabs.
-          </p>
-          <div className="mt-3 pt-2.5 border-t border-red-200 text-[11px] text-red-700 space-y-1">
-            <p className="font-bold text-red-900">How to increase your quota:</p>
-            <p>1. Open AWS Console → Search for <strong>Service Quotas</strong> in <code>us-east-1</code>.</p>
-            <p>2. Select <strong>Amazon EC2</strong> → Search: <code>Running On-Demand Standard instances</code> (L-1216C47A).</p>
-            <p>3. Click <strong>Request quota increase</strong> and enter <strong>64</strong>.</p>
-            <p>4. Once AWS approves the request, return here and click <strong>Verify</strong> again.</p>
-          </div>
+          {quotaDetails?.permission_denied ? (
+            <>
+              <p className="text-sm font-extrabold text-red-700 flex items-center gap-1.5">
+                <span>⚠️ Missing IAM Permission: ServiceQuotasReadOnlyAccess</span>
+              </p>
+              <p className="text-xs text-red-700 mt-1.5 leading-relaxed">
+                Your IAM user has valid EC2 access, but AWS blocked reading your vCPU quota because your IAM user is missing the <code className="bg-red-100 px-1 py-0.5 rounded font-mono text-red-900 font-bold">servicequotas:GetServiceQuota</code> permission.
+              </p>
+              <p className="text-xs text-red-800 font-semibold mt-2">
+                💡 Your account likely already has enough vCPUs, but your IAM user cannot read the limit!
+              </p>
+              <div className="mt-3 pt-2.5 border-t border-red-200 text-[11px] text-red-700 space-y-1">
+                <p className="font-bold text-red-900">How to fix in 30 seconds:</p>
+                <p>1. Open AWS Console → Search for <strong>IAM</strong> → Click <strong>Users</strong>.</p>
+                <p>2. Select this IAM User → Under <strong>Permissions policies</strong>, click <strong>Add permissions</strong> → <strong>Attach policies directly</strong>.</p>
+                <p>3. Search for <strong>ServiceQuotasReadOnlyAccess</strong>, check the box, and click <strong>Add permissions</strong>.</p>
+                <p>4. Return here and click <strong>Verify AWS Account &amp; 36-vCPU Quota</strong> again.</p>
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-extrabold text-red-700 flex items-center gap-1.5">
+                <span>❌ Insufficient vCPU Quota</span>
+              </p>
+              <p className="text-xs text-red-700 mt-1.5 leading-relaxed">
+                Your AWS account in <strong className="underline">{quotaDetails?.region || 'us-east-1'}</strong> currently has{' '}
+                <strong className="text-red-900 bg-red-100 px-1 py-0.5 rounded">{quotaDetails?.available_vcpus ?? 0} vCPUs</strong> available.
+              </p>
+              <p className="text-xs text-red-800 font-semibold mt-2">
+                ⚠️ You need at least <strong>36 vCPUs</strong> in a single region to launch FreeLabs.
+              </p>
+              <div className="mt-3 pt-2.5 border-t border-red-200 text-[11px] text-red-700 space-y-1">
+                <p className="font-bold text-red-900">How to increase your quota:</p>
+                <p>1. Open AWS Console → Search for <strong>Service Quotas</strong> in <code>us-east-1</code>.</p>
+                <p>2. Select <strong>Amazon EC2</strong> → Search: <code>Running On-Demand Standard instances</code> (L-1216C47A).</p>
+                <p>3. Click <strong>Request quota increase</strong> and enter <strong>64</strong>.</p>
+                <p>4. Once AWS approves the request, return here and click <strong>Verify</strong> again.</p>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -631,10 +506,6 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
             onClick={() => {
               setCredValidationStatus('idle');
               setSuccessBadge('');
-              if (typeof window !== 'undefined') {
-                sessionStorage.setItem('freelabs_cred_status', 'idle');
-                sessionStorage.removeItem('freelabs_success_badge');
-              }
             }}
             className="text-[11px] text-green-700 underline hover:text-green-900 ml-2"
           >

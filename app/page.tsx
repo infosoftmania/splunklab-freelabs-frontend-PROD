@@ -26,22 +26,23 @@ export default function HomePage() {
       .then((res) => res.json())
       .then(async (data) => {
         if (!active) return;
-        const savedEmail =
-          typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_user_email') : null;
 
-        if (data.authenticated || savedEmail) {
-          const email = data.user?.email || data.user?.email_id || savedEmail || '';
+        if (data.authenticated && data.user) {
+          const email = data.user?.email || data.user?.email_id || '';
           const name = data.user?.name || data.user?.first_name || email.split('@')[0] || 'User';
-
-          if (data.token && typeof window !== 'undefined') {
-            sessionStorage.setItem('freelabs_google_token', data.token);
-          }
-          const token = data.token || (typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_google_token') : null) || undefined;
+          const token = data.token || undefined;
 
           // Verify if admin via /api/auth/verify-admin
           let isAdmin = false;
           try {
-            const adminRes = await fetch(`/api/auth/verify-admin?email=${encodeURIComponent(email)}`);
+            const adminRes = await fetch('/api/auth/verify-admin', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { Authorization: `Bearer ${token}` } : {}),
+              },
+              body: JSON.stringify({ token }),
+            });
             const adminData = await adminRes.json();
             isAdmin = Boolean(adminData?.is_admin === true);
           } catch (err) {
@@ -69,23 +70,6 @@ export default function HomePage() {
     try {
       await fetch('/api/logout', { method: 'POST' });
     } catch {}
-    if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('freelabs_user_email');
-      sessionStorage.removeItem('freelabs_user_name');
-      sessionStorage.removeItem('freelabs_google_token');
-      sessionStorage.removeItem('freelabs_aws_ak');
-      sessionStorage.removeItem('freelabs_aws_sk');
-      sessionStorage.removeItem('freelabs_cred_status');
-      sessionStorage.removeItem('freelabs_target_region');
-      sessionStorage.removeItem('freelabs_key_pair');
-      sessionStorage.removeItem('freelabs_success_badge');
-      sessionStorage.removeItem('freelabs_quota_details');
-      sessionStorage.removeItem('freelabs_active_lab_id');
-      sessionStorage.removeItem('freelabs_setup_state');
-      sessionStorage.removeItem('freelabs_live_status');
-      sessionStorage.removeItem('freelabs_provisioned_servers');
-      sessionStorage.removeItem('admin_aws_form_data');
-    }
     setUser(null);
   };
 
