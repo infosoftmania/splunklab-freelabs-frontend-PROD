@@ -23,10 +23,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
   const [awsAccessKey, setAwsAccessKey] = useState('');
   const [awsSecretKey, setAwsSecretKey] = useState('');
   const [isValidatingCreds, setIsValidatingCreds] = useState(false);
-  const [credValidationStatus, setCredValidationStatus] = useState<'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu'>('idle');
+  const [credValidationStatus, setCredValidationStatus] = useState<'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu' | 'insufficient_eip'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [successBadge, setSuccessBadge] = useState('');
   const [quotaDetails, setQuotaDetails] = useState<{ available_vcpus?: number; region?: string; total_quota?: number; permission_denied?: boolean } | null>(null);
+  const [eipDetails, setEipDetails] = useState<{ available_eips?: number; required_eips?: number; region?: string; total_quota?: number } | null>(null);
 
   // Step 2: Unlocked Details (Dynamic single region with >= 36 vCPUs)
   const [targetRegion, setTargetRegion] = useState('us-east-1');
@@ -121,9 +122,22 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         return;
       }
 
-      // PASSED: Valid account & >= 36 vCPUs!
+      if (data.has_required_eips === false) {
+        setCredValidationStatus('insufficient_eip');
+        const eipInfo = {
+          available_eips: data.available_eips ?? 0,
+          required_eips: data.required_eips ?? 9,
+          region: data.region || targetRegion,
+          total_quota: data.total_eip_quota,
+        };
+        setEipDetails(eipInfo);
+        setErrorMessage(data.message || `Insufficient Elastic IP Quota: Your AWS account in ${data.region || targetRegion} currently has ${data.available_eips ?? 0} Elastic IPs available, but at least ${data.required_eips ?? 9} are required for the 9 Splunk servers.`);
+        return;
+      }
+
+      // PASSED: Valid account, >= 36 vCPUs, and >= 9 Elastic IPs!
       const verifiedRegion = data.region || targetRegion || 'us-east-1';
-      const badge = `✅ AWS Account Verified! Found ${data.available_vcpus} vCPUs in ${verifiedRegion}. Ready to configure.`;
+      const badge = `✅ AWS Account Verified! Found ${data.available_vcpus} vCPUs & ${data.available_eips ?? 9} Elastic IPs in ${verifiedRegion}. Ready to configure.`;
       const verifiedQuota = {
         available_vcpus: data.available_vcpus,
         region: verifiedRegion,
@@ -133,6 +147,12 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
       setTargetRegion(verifiedRegion);
       setCredValidationStatus('valid');
       setQuotaDetails(verifiedQuota);
+      setEipDetails({
+        available_eips: data.available_eips,
+        required_eips: data.required_eips ?? 9,
+        region: verifiedRegion,
+        total_quota: data.total_eip_quota,
+      });
       setSuccessBadge(badge);
 
       // Fetch Key Pairs for the verified region
@@ -178,7 +198,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
   const handleLaunchLab = async (e: React.FormEvent) => {
     e.preventDefault();
     if (credValidationStatus !== 'valid') {
-      setErrorMessage('Please verify your AWS credentials and 36+ vCPU quota first.');
+      setErrorMessage('Please verify your AWS credentials and quotas (36+ vCPUs and 9+ Elastic IPs) first.');
       return;
     }
     if (!keyPairName.trim()) {
@@ -431,10 +451,10 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                 </svg>
-                <span>Verifying Account &amp; 36-vCPU Quota...</span>
+                <span>Verifying Account &amp; Quotas...</span>
               </>
             ) : (
-              <span>Verify AWS Account &amp; 36-vCPU Quota</span>
+              <span>Verify AWS Account &amp; Quotas (36 vCPUs + 9 Elastic IPs)</span>
             )}
           </button>
         )}
@@ -470,7 +490,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
                 <p>1. Open AWS Console → Search for <strong>IAM</strong> → Click <strong>Users</strong>.</p>
                 <p>2. Select this IAM User → Under <strong>Permissions policies</strong>, click <strong>Add permissions</strong> → <strong>Attach policies directly</strong>.</p>
                 <p>3. Search for <strong>ServiceQuotasReadOnlyAccess</strong>, check the box, and click <strong>Add permissions</strong>.</p>
-                <p>4. Return here and click <strong>Verify AWS Account &amp; 36-vCPU Quota</strong> again.</p>
+                <p>4. Return here and click <strong>Verify AWS Account &amp; Quotas</strong> again.</p>
               </div>
             </>
           ) : (
@@ -497,6 +517,30 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         </div>
       )}
 
+      {/* INSUFFICIENT ELASTIC IP QUOTA */}
+      {credValidationStatus === 'insufficient_eip' && (
+        <div className="mt-4 p-4 bg-amber-50 border-2 border-amber-300 rounded-xl text-left">
+          <p className="text-sm font-extrabold text-amber-800 flex items-center gap-1.5">
+            <span>⚠️ Insufficient Elastic IP (EIP) Quota</span>
+          </p>
+          <p className="text-xs text-amber-800 mt-1.5 leading-relaxed">
+            Your AWS account in <strong className="underline">{eipDetails?.region || 'us-east-1'}</strong> currently has{' '}
+            <strong className="text-amber-950 bg-amber-100 px-1 py-0.5 rounded">{eipDetails?.available_eips ?? 0} Elastic IPs</strong> available.
+          </p>
+          <p className="text-xs text-amber-900 font-semibold mt-2">
+            ⚠️ FreeLabs requires at least <strong>{eipDetails?.required_eips ?? 9} Elastic IPs</strong> in this region so that all 9 Splunk servers retain static public IPs across Stop &amp; Start cycles.
+          </p>
+          <div className="mt-3 pt-2.5 border-t border-amber-200 text-[11px] text-amber-800 space-y-1">
+            <p className="font-bold text-amber-950">How to request an Elastic IP increase (Free &amp; Instant):</p>
+            <p>1. Open AWS Console → Search for <strong>Service Quotas</strong> in <code>{eipDetails?.region || 'us-east-1'}</code>.</p>
+            <p>2. Select <strong>Amazon Elastic Compute Cloud (Amazon EC2)</strong>.</p>
+            <p>3. Search for: <code>EC2-VPC Elastic IPs</code> (Quota code: <strong>L-0263D0A3</strong>).</p>
+            <p>4. Click <strong>Request quota increase</strong> and enter <strong>15</strong> (or higher).</p>
+            <p>5. Once approved by AWS, return here and click <strong>Verify AWS Account &amp; Quotas</strong> again.</p>
+          </div>
+        </div>
+      )}
+
       {/* SUCCESS BADGE */}
       {credValidationStatus === 'valid' && successBadge && (
         <div className="mt-4 p-3 bg-green-50 border border-green-200 text-green-800 text-xs rounded-xl flex items-center justify-between">
@@ -514,7 +558,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         </div>
       )}
 
-      {/* STEP 2: UNLOCKED FORM (Only visible after valid credentials & >= 36 vCPUs) */}
+      {/* STEP 2: UNLOCKED FORM (Only visible after valid credentials & >= 36 vCPUs & >= 9 EIPs) */}
       {credValidationStatus === 'valid' && (
         <form onSubmit={handleLaunchLab} className="mt-6 pt-6 border-t border-gray-200 space-y-4">
           <div className="flex items-center justify-between bg-blue-50/60 p-3 rounded-lg border border-blue-100">
@@ -522,9 +566,14 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
               <p className="text-xs font-semibold text-blue-900">Target Region</p>
               <p className="text-xs text-blue-700">{targetRegion} — 1 Single Region</p>
             </div>
-            <span className="text-[11px] bg-blue-100 text-blue-800 font-medium px-2 py-0.5 rounded">
-              {quotaDetails?.available_vcpus ?? 36} vCPUs Verified
-            </span>
+            <div className="flex gap-2">
+              <span className="text-[11px] bg-blue-100 text-blue-800 font-medium px-2 py-0.5 rounded">
+                {quotaDetails?.available_vcpus ?? 36} vCPUs Verified
+              </span>
+              <span className="text-[11px] bg-green-100 text-green-800 font-medium px-2 py-0.5 rounded">
+                {eipDetails?.available_eips ?? 9} Elastic IPs Verified
+              </span>
+            </div>
           </div>
 
           {/* Key Pair Selection */}
@@ -574,6 +623,10 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
             />
           </div>
 
+          {errorMessage && credValidationStatus === 'valid' && setupState !== 'error' && (
+            <p className="text-xs text-red-600 font-semibold">{errorMessage}</p>
+          )}
+
           {/* Launch Button */}
           <button
             type="submit"
@@ -600,6 +653,13 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-xl text-center">
           <p className="text-sm font-semibold text-blue-900 animate-pulse">{liveStatusText}</p>
           <p className="text-xs text-blue-600 mt-1">Time elapsed: {elapsedSeconds}s</p>
+        </div>
+      )}
+
+      {/* ERROR DURING PROVISIONING */}
+      {setupState === 'error' && errorMessage && (
+        <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl text-center">
+          <p className="text-xs font-semibold text-red-700">{errorMessage}</p>
         </div>
       )}
 
