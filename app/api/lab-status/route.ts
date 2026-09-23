@@ -27,11 +27,12 @@ export async function POST(req: Request) {
       process.env.NEXT_PUBLIC_FREELABS_STATUS_API_URL ||
       'https://wkn4icbie8.execute-api.us-east-1.amazonaws.com/freelabs/status';
 
+    const emailPrefix = user_email ? user_email.split('@')[0] : '';
     const statusPayload = {
       action: 'STATUS',
       user_name,
       user_email: user_email || `${user_name}@freelabs.io`,
-      lab_id: lab_id || '',
+      lab_id: lab_id || emailPrefix,
       region,
       aws_access_key,
       aws_secret_key,
