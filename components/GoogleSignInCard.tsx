@@ -73,7 +73,7 @@ export default function GoogleSignInCard({ onLoginSuccess }: Props) {
                 throw new Error(authData?.message || 'Google authentication failed');
               }
 
-              const tokenToUse = (authData.token || authData.access_token || authData.id_token || idToken) as string;
+              const tokenToUse = (authData.access_token || authData.token || authData.id_token || idToken) as string;
 
               let decodedEmail = '';
               let decodedName = '';
@@ -93,7 +93,6 @@ export default function GoogleSignInCard({ onLoginSuccess }: Props) {
                 authData.user?.email ||
                 authData.user?.email_id ||
                 decodedEmail ||
-                sessionStorage.getItem('freelabs_user_email') ||
                 '';
               const userName =
                 authData.user?.name ||
@@ -102,26 +101,21 @@ export default function GoogleSignInCard({ onLoginSuccess }: Props) {
                 userEmail.split('@')[0] ||
                 '';
 
-              sessionStorage.setItem('freelabs_google_token', tokenToUse);
-              if (userEmail) {
-                sessionStorage.setItem('freelabs_user_email', userEmail);
-              }
-              if (userName) {
-                sessionStorage.setItem('freelabs_user_name', userName);
-              }
-
               // 2. Check if user is an Admin via /api/auth/verify-admin
               let isAdmin = false;
               try {
                 const adminRes = await fetch('/api/auth/verify-admin', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ email: userEmail, token: tokenToUse }),
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(tokenToUse ? { Authorization: `Bearer ${tokenToUse}` } : {}),
+                  },
+                  body: JSON.stringify({ token: tokenToUse }),
                 });
                 const adminData = await adminRes.json();
                 isAdmin = Boolean(adminData?.is_admin === true);
-              } catch (adminErr) {
-                console.warn('[LOGIN] Admin verification check skipped:', adminErr);
+              } catch (err) {
+                console.warn('[AUTH] Verify admin check failed:', err);
               }
 
               onLoginSuccess({

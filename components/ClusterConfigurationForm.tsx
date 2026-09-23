@@ -107,23 +107,9 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
 
   const googleBtnContainerRef = useRef<HTMLDivElement>(null);
 
-  // Check auth state & session PEM on mount
+  // Check auth state on mount via secure profile API
   useEffect(() => {
     let active = true;
-    const savedEmail = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_user_email') : null;
-    if (savedEmail) {
-      setIsAuthenticated(true);
-      setUserEmail(savedEmail);
-    }
-
-    // Auto-detect PEM key if downloaded in current browser session
-    const sessionPem = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_pem_key') : null;
-    const sessionPemName = typeof window !== 'undefined' ? sessionStorage.getItem('freelabs_pem_filename') : null;
-    if (sessionPem && !pemKeyContent) {
-      setPemKeyContent(sessionPem);
-      setPemKeyFileName(sessionPemName || 'session-key.pem');
-      setPemSource('session');
-    }
 
     fetch('/api/auth/profile')
       .then((res) => res.json())
@@ -131,21 +117,20 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
         if (!active) return;
         if (data.authenticated) {
           setIsAuthenticated(true);
-          const email = data.user?.email || data.user?.email_id || savedEmail || '';
+          const email = data.user?.email || data.user?.email_id || '';
           setUserEmail(email);
-          if (email) sessionStorage.setItem('freelabs_user_email', email);
-        } else if (!savedEmail) {
+        } else {
           setIsAuthenticated(false);
         }
       })
       .catch(() => {
-        if (active && !savedEmail) setIsAuthenticated(false);
+        if (active) setIsAuthenticated(false);
       });
 
     return () => {
       active = false;
     };
-  }, [pemKeyContent]);
+  }, []);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -193,7 +178,6 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
       const email = user?.email || user?.email_id || '';
       if (email) {
         setUserEmail(email);
-        sessionStorage.setItem('freelabs_user_email', email);
       }
     } catch (err) {
       console.error('Google Sign-In error:', err);
@@ -295,9 +279,6 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
       await fetch('/api/logout', { method: 'POST' });
     } catch {
       // ignore
-    }
-    if (typeof window !== 'undefined') {
-      sessionStorage.removeItem('freelabs_user_email');
     }
     setIsAuthenticated(false);
     setUserEmail('');

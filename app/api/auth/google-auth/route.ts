@@ -125,10 +125,31 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // Forward backend auth cookies (access_token, refresh_token, session_id, etc.)
+    const setCookies =
+      typeof response.headers.getSetCookie === 'function'
+        ? response.headers.getSetCookie()
+        : [];
+
+    let extractedAccessToken = (data?.access_token as string) || '';
+    for (const cookie of setCookies) {
+      const [cookiePair] = cookie.split(';');
+      const [name, ...valueParts] = cookiePair.split('=');
+      if (name.trim() === 'access_token' || name.trim() === 'token') {
+        extractedAccessToken = valueParts.join('=').trim();
+      }
+    }
+
+    const finalBackendToken = extractedAccessToken || (data?.access_token as string) || tokenToUse;
+    data.token = finalBackendToken;
+    data.access_token = extractedAccessToken || (data?.access_token as string) || '';
+
     const nextResponse = NextResponse.json(
       {
         success: true,
         ...data,
+        token: finalBackendToken,
+        access_token: data.access_token,
       },
       { status: 200 },
     );
@@ -141,12 +162,6 @@ export async function POST(req: NextRequest) {
       path: '/',
       maxAge: 30 * 24 * 3600,
     });
-
-    // Forward backend auth cookies (access_token, refresh_token, session_id, etc.)
-    const setCookies =
-      typeof response.headers.getSetCookie === 'function'
-        ? response.headers.getSetCookie()
-        : [];
 
     for (const cookie of setCookies) {
       const [cookiePair, ...attributes] = cookie.split(';');
