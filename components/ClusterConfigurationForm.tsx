@@ -899,12 +899,12 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers, 
         )}
 
         {/* Action Button */}
-        <div className="mt-6 flex justify-end gap-3 border-t border-gray-200 pt-4">
+        <div className="mt-6 flex justify-end gap-3 border-t border-gray-100 pt-4">
           <button
             type="button"
             onClick={closeModal}
             disabled={working}
-            className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 transition"
           >
             {progressStep === 'completed' ? 'Close' : 'Cancel'}
           </button>
@@ -912,19 +912,19 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers, 
             type="button"
             onClick={proceed}
             disabled={working || progressStep === 'completed'}
-            className={`rounded-lg px-5 py-2 text-sm font-semibold text-white shadow-xs transition-colors ${
+            className={`rounded-lg px-5 py-2 text-sm font-semibold text-white shadow-sm transition-all ${
               working || progressStep === 'completed'
-                ? 'bg-gray-400 cursor-not-allowed'
-                : 'bg-blue-600 hover:bg-blue-700'
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 hover:bg-blue-700 active:scale-95'
             }`}
           >
             {working
-              ? 'Processing...'
+              ? '⏳ Processing...'
               : licenseInstallReady
-              ? 'Validate License & Continue'
+              ? '✅ Validate License & Continue'
               : !pemKeyContent
               ? 'Select .pem Key & Continue'
-              : 'Validate Servers & Continue'}
+              : '🚀 Validate Servers & Continue'}
           </button>
         </div>
       </div>

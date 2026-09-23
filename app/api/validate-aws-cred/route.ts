@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { STSClient, GetCallerIdentityCommand } from '@aws-sdk/client-sts';
 import { ServiceQuotasClient, GetServiceQuotaCommand } from '@aws-sdk/client-service-quotas';
-import { EC2Client, DescribeInstancesCommand } from '@aws-sdk/client-ec2';
+import { EC2Client, DescribeInstancesCommand, DescribeAddressesCommand } from '@aws-sdk/client-ec2';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,6 +11,8 @@ const AWS_CRED_VALIDATE_API_URL =
 
 const REQUIRED_VCPUS = 36;
 const STANDARD_VCPU_QUOTA_CODE = 'L-1216C47A'; // Running On-Demand Standard instances
+const REQUIRED_SPLUNK_EIPS = 9;
+const ELASTIC_IP_QUOTA_CODE = 'L-0263D0A3'; // EC2-VPC Elastic IPs (default: 5)
 
 function extractEmailFromToken(token: string): string {
   try {
@@ -74,6 +76,45 @@ async function checkRegionQuota(
 
   const available = Math.max(0, quotaValue - usedVcpus);
   return { region: regionName, quota: quotaValue, used: usedVcpus, available };
+}
+
+async function checkRegionElasticIpQuota(
+  regionName: string,
+  key: string,
+  secret: string
+): Promise<{ region: string; quota: number; used: number; available: number }> {
+  let quotaValue = 5;
+  let usedEips = 0;
+
+  try {
+    const sqClient = new ServiceQuotasClient({
+      region: regionName,
+      credentials: { accessKeyId: key, secretAccessKey: secret },
+    });
+
+    const quotaRes = await sqClient.send(
+      new GetServiceQuotaCommand({
+        ServiceCode: 'ec2',
+        QuotaCode: ELASTIC_IP_QUOTA_CODE,
+      })
+    );
+    quotaValue = Number(quotaRes.Quota?.Value ?? 5);
+  } catch {
+    quotaValue = 5;
+  }
+
+  try {
+    const ec2Client = new EC2Client({
+      region: regionName,
+      credentials: { accessKeyId: key, secretAccessKey: secret },
+    });
+
+    const eipRes = await ec2Client.send(new DescribeAddressesCommand({}));
+    usedEips = eipRes.Addresses?.length ?? 0;
+  } catch {}
+
+  const available = Math.max(0, quotaValue - usedEips);
+  return { region: regionName, quota: quotaValue, used: usedEips, available };
 }
 
 export async function POST(req: NextRequest) {
@@ -220,19 +261,50 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 5. Success: Valid account and >= 36 vCPUs confirmed!
+    // 5. Check Elastic IP quota for the 9 Splunk servers
+    const eipResult = await checkRegionElasticIpQuota(finalResult.region, trimmedKey, trimmedSecret);
+    const hasRequiredEips = eipResult.available >= REQUIRED_SPLUNK_EIPS;
+
+    if (!hasRequiredEips) {
+      return NextResponse.json(
+        {
+          success: false,
+          valid_account: true,
+          has_required_vcpu: true,
+          has_required_eips: false,
+          available_vcpus: finalResult.available,
+          total_quota: finalResult.quota,
+          available_eips: eipResult.available,
+          required_eips: REQUIRED_SPLUNK_EIPS,
+          total_eip_quota: eipResult.quota,
+          used_eips: eipResult.used,
+          region: finalResult.region,
+          account_id: accountId,
+          upstream_logged: upstreamLogged,
+          email: userEmail,
+          message: `Insufficient Elastic IP Quota: Your AWS account in ${finalResult.region} currently has ${eipResult.available} Elastic IPs available, but at least ${REQUIRED_SPLUNK_EIPS} Elastic IPs are required for the 9 Splunk servers to ensure fixed cluster IPs across reboots. Please request an increase up to 15+ in AWS Service Quotas (${finalResult.region} -> EC2 -> 'EC2-VPC Elastic IPs').`,
+        },
+        { status: 200 }
+      );
+    }
+
+    // 6. Success: Valid account, >= 36 vCPUs, and >= 9 Elastic IPs confirmed!
     return NextResponse.json(
       {
         success: true,
         valid_account: true,
         has_required_vcpu: true,
+        has_required_eips: true,
         available_vcpus: finalResult.available,
         total_quota: finalResult.quota,
+        available_eips: eipResult.available,
+        required_eips: REQUIRED_SPLUNK_EIPS,
+        total_eip_quota: eipResult.quota,
         region: finalResult.region,
         account_id: accountId,
         upstream_logged: upstreamLogged,
         email: userEmail,
-        message: `AWS Credentials & ${finalResult.available} vCPUs verified successfully in ${finalResult.region}!`,
+        message: `AWS Credentials, ${finalResult.available} vCPUs, and ${eipResult.available} Elastic IPs verified successfully in ${finalResult.region}!`,
       },
       { status: 200 }
     );

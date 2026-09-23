@@ -355,7 +355,7 @@ const handleGroupChange = (
       }
 
       // Safety timeout after ~4 minutes
-      if (attempts >= 25) {
+      if (attempts >= 36) {
         stopAllIntervals();
         setIsSubmitting(false);
         setLiveStatusText('Provisioning is taking longer than expected. Check your AWS EC2 Console.');
@@ -497,68 +497,88 @@ const handleGroupChange = (
       >
         Cluster Configuration
       </button>
-    <form onSubmit={handleSubmit} className="bg-white p-9 rounded shadow space-y-3">
-      {/* AWS Access Key */}
-      {/* AWS Access Key */}
-<div className="items-center gap-2">
-  <InputField
-    label="AWS Access Key"
-    name="aws_access_key"
-    value={formData.aws_access_key}
-    onChange={handleChange}
-    required
-    disabled={awsValid === true} // disable after successful validation
-  />
-  {awsAccessMessage && (
-    <p className={`text-sm ${awsValid ? 'text-green-600' : 'text-red-600'}`}>
-      {awsAccessMessage}
-    </p>
-  )}
-</div>
+    <form onSubmit={handleSubmit} className="space-y-6">
+      
+      {/* STEP 1: AWS Credentials */}
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
+        <h2 className="text-base font-bold text-gray-900 border-b border-gray-100 pb-2">
+          Step 1: AWS Credentials
+        </h2>
+        
+        <div className="space-y-4">
+          <div>
+            <InputField
+              label="AWS Access Key"
+              name="aws_access_key"
+              value={formData.aws_access_key}
+              onChange={handleChange}
+              required
+              disabled={awsValid === true || isValidating}
+            />
+            {awsAccessMessage && (
+              <p className={`text-xs mt-1.5 font-medium ${awsValid ? 'text-green-600' : 'text-red-600'}`}>
+                {awsAccessMessage}
+              </p>
+            )}
+          </div>
 
-{/* AWS Secret Key */}
-<div className="items-center gap-2">
-  <InputField
-    label="AWS Secret Key"
-    name="aws_secret_key"
-    type="password"
-    value={formData.aws_secret_key}
-    onChange={handleChange}
-    required
-    disabled={awsValid === true} // disable after successful validation
-  />
-  {awsSecretMessage && (
-    <p className={`text-sm ${awsValid ? 'text-green-600' : 'text-red-600'}`}>
-      {awsSecretMessage}
-    </p>
-  )}
-</div>
+          <div>
+            <InputField
+              label="AWS Secret Key"
+              name="aws_secret_key"
+              type="password"
+              value={formData.aws_secret_key}
+              onChange={handleChange}
+              required
+              disabled={awsValid === true || isValidating}
+            />
+            {awsSecretMessage && (
+              <p className={`text-xs mt-1.5 font-medium ${awsValid ? 'text-green-600' : 'text-red-600'}`}>
+                {awsSecretMessage}
+              </p>
+            )}
+          </div>
+        </div>
 
-
-      <div className="flex gap-2 items-center">
-        <button
-          type="button"
-          disabled={isValidating}
-          onClick={validateAws}
-          className={`px-3 py-2 rounded text-white font-medium ${isValidating ? 'bg-gray-400' : 'bg-blue-600 hover:bg-blue-700'}`}
-        >
-          {isValidating ? 'Validating...' : 'Validate AWS'}
-        </button>
-
-        <button
-          type="button"
-          disabled={isCheckingStatus || !formData.aws_access_key || !formData.user_name.trim()}
-          onClick={checkExistingStatus}
-          className={`px-3 py-2 rounded text-xs font-medium border border-gray-300 text-gray-700 hover:bg-gray-100 transition-colors ${
-            isCheckingStatus || !formData.aws_access_key || !formData.user_name.trim()
-              ? 'opacity-50 cursor-not-allowed'
-              : ''
-          }`}
-          title="Load your existing active servers"
-        >
-          {isCheckingStatus ? 'Loading...' : 'Load Dashboard'}
-        </button>
+        {!awsValid && (
+          <div className="flex flex-wrap gap-3 items-center pt-2">
+            <button
+              type="button"
+              disabled={isValidating || !formData.aws_access_key || !formData.aws_secret_key}
+              onClick={validateAws}
+              className="flex-1 py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isValidating ? 'Validating...' : 'Validate AWS'}
+            </button>
+            <button
+              type="button"
+              disabled={isCheckingStatus || !formData.aws_access_key || !formData.user_name.trim()}
+              onClick={checkExistingStatus}
+              className="flex-1 py-2.5 px-4 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Load your existing active servers"
+            >
+              {isCheckingStatus ? 'Loading...' : 'Load Dashboard'}
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* STEP 2: Configuration & Launch (Only visible if AWS is valid) */}
+      {awsValid && (
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+            <h2 className="text-base font-bold text-gray-900">
+              Step 2: Configuration & Launch
+            </h2>
+            <button
+              type="button"
+              onClick={() => { setAwsValid(null); setAwsAccessMessage(''); setAwsSecretMessage(''); }}
+              className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+            >
+              Change AWS Keys
+            </button>
+          </div>
+          <div className="space-y-4">
 
       {/* AWS Region */}
       <div className="items-center gap-2">
@@ -666,8 +686,6 @@ const handleGroupChange = (
   </>
 )}
 
-
-
       {/* CodeBuild Group */}
       <InputField
         label="Environments"
@@ -678,8 +696,6 @@ const handleGroupChange = (
         options={codebuildGroupOptions}
         required
       />
-
-
 
       {/* Username */}
       <InputField
@@ -713,15 +729,15 @@ const handleGroupChange = (
           !isEmailValid ||
           !formData.user_name.trim()
         }
-        className={`border w-[400px] mt-2 py-3 rounded-lg text-lg font-semibold text-white transition-all
+        className={`w-full mt-4 py-3 rounded-lg text-sm font-bold text-white transition-all
           ${
             isSubmitting ||
             setupState === 'in_progress' ||
             awsValid !== true ||
             !isEmailValid ||
             !formData.user_name.trim()
-              ? 'bg-gray-400 cursor-not-allowed'
-              : 'bg-black hover:bg-gray-800 shadow-md hover:shadow-lg'
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-green-600 hover:bg-green-700 shadow-md hover:shadow-lg'
           }`}
       >
         {setupState === 'in_progress'
@@ -731,7 +747,11 @@ const handleGroupChange = (
           : 'Create Environment'}
       </button>
 
-      {/* Progress Banner: Environment setup, please wait... */}
+      </div>
+    </div>
+  )}
+
+  {/* Progress Banner: Environment setup, please wait... */}
       {setupState === 'in_progress' && (
         <div className="mt-4 p-4 border border-blue-300 rounded-lg bg-blue-50 shadow-sm max-w-[420px]">
           <div className="flex items-center gap-3">

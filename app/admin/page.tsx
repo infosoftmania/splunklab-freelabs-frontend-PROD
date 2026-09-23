@@ -139,32 +139,39 @@ export default function AdminPage() {
 
   // 3. Authenticated as Admin
   return (
-    <div className="min-h-screen bg-gray-50 py-8 px-4">
-      <div className="max-w-xl mx-auto mb-4 bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-purple-900">👑 Admin Console</span>
-          <span className="text-xs text-purple-700">({user.email})</span>
+    <div className="min-h-screen bg-gray-50">
+      {/* Top Bar */}
+      <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-30">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center text-white text-sm">👑</span>
+            <div>
+              <p className="text-sm font-bold text-gray-900 leading-none">Admin Console</p>
+              <p className="text-xs text-gray-500 leading-none mt-0.5">{user.email}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              href="/"
+              className="text-xs font-semibold px-3 py-1.5 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 border border-gray-200 transition"
+            >
+              🎓 Student Portal
+            </Link>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="text-xs text-red-600 hover:text-red-700 font-semibold px-3 py-1.5 rounded-lg border border-red-100 hover:bg-red-50 transition"
+            >
+              Logout
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/"
-            className="text-xs font-semibold px-2.5 py-1 bg-white text-purple-700 rounded-lg hover:bg-purple-100 border border-purple-200 shadow-sm"
-          >
-            🎓 Student Portal
-          </Link>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-xs text-red-600 hover:text-red-700 font-semibold px-2 py-1"
-          >
-            Logout
-          </button>
-        </div>
-      </div>
+      </header>
 
-      <div style={{ maxWidth: 600, margin: '0 auto' }}>
+      {/* Page Content */}
+      <main className="max-w-lg mx-auto px-4 py-8">
         <AwsForm userEmail={user.email} userName={user.name} />
-      </div>
+      </main>
     </div>
   );
 }
