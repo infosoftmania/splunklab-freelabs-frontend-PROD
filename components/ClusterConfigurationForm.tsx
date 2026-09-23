@@ -19,6 +19,8 @@ type ServerName = (typeof SERVER_NAMES)[number];
 type Props = {
   onClose: () => void;
   provisionedServers?: Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string } > | null;
+  userEmail?: string;
+  hideAuth?: boolean;
 };
 
 type ProgressStep =
@@ -63,7 +65,7 @@ function loadGoogleIdentityScript(): Promise<void> {
   });
 }
 
-export default function ClusterConfigurationForm({ onClose, provisionedServers }: Props) {
+export default function ClusterConfigurationForm({ onClose, provisionedServers, userEmail: propUserEmail, hideAuth }: Props) {
   const [publicIps, setPublicIps] = useState<Record<ServerName, string>>(() =>
     Object.fromEntries(SERVER_NAMES.map((name) => [name, ''])) as Record<ServerName, string>
   );
@@ -100,8 +102,8 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auth state
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(null);
-  const [userEmail, setUserEmail] = useState<string>('');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean | null>(hideAuth ? true : null);
+  const [userEmail, setUserEmail] = useState<string>(propUserEmail || '');
   const [authLoading, setAuthLoading] = useState(false);
   const [isGsiButtonRendered, setIsGsiButtonRendered] = useState(false);
 
@@ -109,6 +111,7 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
 
   // Check auth state on mount via secure profile API
   useEffect(() => {
+    if (hideAuth) return;
     let active = true;
 
     fetch('/api/auth/profile')
@@ -118,7 +121,7 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
         if (data.authenticated) {
           setIsAuthenticated(true);
           const email = data.user?.email || data.user?.email_id || '';
-          setUserEmail(email);
+          if (!propUserEmail) setUserEmail(email);
         } else {
           setIsAuthenticated(false);
         }
@@ -130,7 +133,7 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
     return () => {
       active = false;
     };
-  }, []);
+  }, [hideAuth, propUserEmail]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -612,6 +615,7 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
         </div>
 
         {/* Authentication Status Bar */}
+        {!hideAuth && (
         <div className="mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-gray-600">
@@ -677,6 +681,7 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers }
             )}
           </div>
         </div>
+        )}
 
         {/* Server IP Inputs Table */}
         <div className="mt-5">

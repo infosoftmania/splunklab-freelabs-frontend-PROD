@@ -163,7 +163,7 @@ export default function AdminPage() {
       </div>
 
       <div style={{ maxWidth: 600, margin: '0 auto' }}>
-        <AwsForm />
+        <AwsForm userEmail={user.email} userName={user.name} />
       </div>
     </div>
   );

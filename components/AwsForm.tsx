@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import InputField from './InputField';
 import KeyDownloadButton from './KeyDownloadButton';
 import ClusterConfigurationForm from './ClusterConfigurationForm';
+import { readLabId, writeLabId, readAwsCredentials, removeAwsCredentials, writeAwsCredentials } from '../lib/lab-storage';
 import environments from '../data/environments.json';
 import awsRegions from '../data/awsRegions.json';
 
@@ -17,7 +18,12 @@ type AdminFormData = {
   codebuild_projects: string[];
 };
 
-export default function AwsForm() {
+type AwsFormProps = {
+  userEmail?: string;
+  userName?: string;
+};
+
+export default function AwsForm({ userEmail = '', userName = '' }: AwsFormProps) {
   const [selectedGroup, setSelectedGroup] = useState('project_5');
   const [awsValid, setAwsValid] = useState<boolean | null>(null);
   const [keyPairValid, setKeyPairValid] = useState<boolean | null>(null);
@@ -30,7 +36,7 @@ export default function AwsForm() {
   const [awsSecretMessage, setAwsSecretMessage] = useState('');
   const [keyPairMessage, setKeyPairMessage] = useState('');
   const [keyPairsLoading, setKeyPairsLoading] = useState(false);
-  const [isEmailValid, setIsEmailValid] = useState(false);
+  const [isEmailValid, setIsEmailValid] = useState(Boolean(userEmail));
 
   const [keyPairsList, setKeyPairsList] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
@@ -60,20 +66,41 @@ export default function AwsForm() {
     aws_secret_key: '',
     region: '',
     key_pair_name: '',
-    user_email: '',
-    user_name: '',
+    user_email: userEmail,
+    user_name: userName,
     codebuild_projects: ['project 5'] as string[],
   }));
-
   const codebuildGroupOptions = Object.entries(environments).map(
-  ([key, value]) => ({
-    label: value.label,
-    value: key,
-  })
-);
+    ([key, value]) => ({
+      label: value.label,
+      value: key,
+    })
+  );
 
+  useEffect(() => {
+    if (!activeLabId) {
+      const storedLabId = readLabId();
+      if (storedLabId) setActiveLabId(storedLabId);
+    }
 
-  // -------------------------
+    if (!formData.user_email.trim() || formData.aws_access_key || formData.aws_secret_key) return;
+
+    const storedAwsCredentials = readAwsCredentials(formData.user_email);
+    if (!storedAwsCredentials) return;
+
+    setFormData((current) => ({
+      ...current,
+      aws_access_key: storedAwsCredentials.accessKey,
+      aws_secret_key: storedAwsCredentials.secretKey,
+      region: storedAwsCredentials.region || current.region,
+    }));
+    
+    if (storedAwsCredentials.status === 'valid') {
+      setAwsValid(true);
+      setAwsAccessMessage('AWS Access Key restored');
+      setAwsSecretMessage('AWS Secret Key restored');
+    }
+  }, [formData.user_email, formData.aws_access_key, formData.aws_secret_key, activeLabId]);
   // Input handlers
   // -------------------------
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
@@ -81,17 +108,26 @@ export default function AwsForm() {
 
     // AWS fields reset
     if (['aws_access_key', 'aws_secret_key', 'region'].includes(name)) {
+            writeAwsCredentials(formData.user_email, {
+              accessKey: formData.aws_access_key.trim(),
+              secretKey: formData.aws_secret_key.trim(),
+              status: 'valid',
+              region: formData.region || 'us-east-1',
+              updatedAt: new Date().toISOString(),
+            });
       setAwsValid(null);
       setKeyPairValid(null);
     }
 
     if (name === 'key_pair_name') {
       setKeyPairValid(null);
+            removeAwsCredentials(formData.user_email);
     }
 
     // Validate email
     if (name === 'user_email') {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+          removeAwsCredentials(formData.user_email);
       setIsEmailValid(emailRegex.test(value));
       setFormData(prev => ({ ...prev, user_email: value }));
       return;
@@ -185,31 +221,40 @@ const handleGroupChange = (
     setKeyPairMessage('');
 
     try {
-      const res = await fetch('/api/validate-aws', {
+      const res = await fetch('/api/validate-aws-cred', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           aws_access_key: formData.aws_access_key.trim(),
           aws_secret_key: formData.aws_secret_key.trim(),
           region: formData.region || 'us-east-1',
+          user_email: formData.user_email,
         }),
       });
 
       const data = await res.json();
-      const isValid = Boolean(data.awsValid ?? data.success ?? data.valid_account);
 
-      if (isValid) {
-        setAwsAccessMessage('AWS Access Key is valid');
-        setAwsSecretMessage('AWS Secret Key is valid');
-        setAwsValid(true);
-        if (formData.region) {
-          fetchKeyPairsForRegion(formData.region);
-        }
-      } else {
+      if (!data.valid_account) {
         const errorMsg = data.message || 'Invalid AWS credentials';
         setAwsAccessMessage(errorMsg);
         setAwsSecretMessage(errorMsg);
         setAwsValid(false);
+      } else if (!data.has_required_vcpu) {
+        const errorMsg = data.message || 'Insufficient vCPU quota';
+        setAwsAccessMessage(errorMsg);
+        setAwsSecretMessage(errorMsg);
+        setAwsValid(false);
+      } else {
+        setAwsAccessMessage('AWS Access Key is valid');
+        setAwsSecretMessage('AWS Secret Key is valid');
+        setAwsValid(true);
+        if (data.region) {
+          setFormData((prev) => ({ ...prev, region: data.region }));
+          fetchKeyPairsForRegion(data.region);
+        } else if (formData.region) {
+          fetchKeyPairsForRegion(formData.region);
+        }
+        if (activeLabId) startPollingStatus(activeLabId, data.region || formData.region, formData.user_email, formData.user_name);
       }
     } catch (err) {
       console.error(err);
@@ -242,10 +287,17 @@ const handleGroupChange = (
     }
   };
 
+  useEffect(() => {
+    if (!formData.user_email.trim() || activeLabId) return;
+
+    const storedLabId = readLabId();
+    if (storedLabId) setActiveLabId(storedLabId);
+  }, [formData.user_email, activeLabId]);
+
   // -------------------------
   // Status Polling for 16 Servers
   // -------------------------
-  const startPollingStatus = (labId: string) => {
+  const startPollingStatus = (labId: string, currentRegion?: string, currentEmail?: string, currentName?: string) => {
     stopAllIntervals();
     setElapsedSeconds(0);
     setLiveStatusText('Initiating 16 servers on AWS...');
@@ -265,9 +317,9 @@ const handleGroupChange = (
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             lab_id: labId,
-            user_name: formData.user_name.trim() || 'student',
-            user_email: formData.user_email.trim(),
-            region: formData.region,
+            user_name: (currentName !== undefined ? currentName : formData.user_name).trim() || 'student',
+            user_email: (currentEmail !== undefined ? currentEmail : formData.user_email).trim(),
+            region: currentRegion || formData.region,
             aws_access_key: formData.aws_access_key,
             aws_secret_key: formData.aws_secret_key,
           }),
@@ -278,6 +330,7 @@ const handleGroupChange = (
         const data = await res.json();
         if (data.success && data.instance_count > 0) {
           const servers = data.servers || {};
+          writeLabId(labId);
           const serverCount = Object.keys(servers).length;
 
           // Count instances with public IP assigned
@@ -294,6 +347,7 @@ const handleGroupChange = (
             setSetupState('completed');
             setIsSubmitting(false);
             setSuccessMessage('✅ Environment setup done! All 16 servers are ready.');
+            writeLabId(labId);
           }
         }
       } catch (err) {
@@ -341,6 +395,10 @@ const handleGroupChange = (
 
       const data = await res.json();
       if (data.success && data.instance_count > 0 && data.servers && Object.keys(data.servers).length > 0) {
+        if (data.lab_id) {
+          setActiveLabId(data.lab_id);
+          writeLabId(data.lab_id);
+        }
         setProvisionedServers(data.servers);
         setSetupState('completed');
         setSuccessMessage(`✅ Found ${data.instance_count} active servers in your account!`);
@@ -372,6 +430,7 @@ const handleGroupChange = (
 
     const labId = `freelab_${Math.floor(Date.now() / 1000)}`;
     setActiveLabId(labId);
+    writeLabId(labId);
 
     const payload = {
       action: 'PROVISION',
@@ -386,7 +445,7 @@ const handleGroupChange = (
     };
 
     // Immediately start UI timer and live status polling
-    startPollingStatus(labId);
+    startPollingStatus(labId, formData.region, formData.user_email, formData.user_name);
 
     try {
       const res = await fetch('/api/submit-form', {
@@ -495,9 +554,9 @@ const handleGroupChange = (
               ? 'opacity-50 cursor-not-allowed'
               : ''
           }`}
-          title="Check if you already have running servers in your AWS account"
+          title="Load your existing active servers"
         >
-          {isCheckingStatus ? 'Checking...' : '🔍 Check Existing Servers'}
+          {isCheckingStatus ? 'Loading...' : 'Load Dashboard'}
         </button>
       </div>
 
@@ -775,9 +834,14 @@ const handleGroupChange = (
                     )}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <code className="text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded font-mono text-[11px] font-medium">
-                      {pubIp || 'N/A'}
-                    </code>
+                    <div className="text-right">
+                      <code className="block text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded font-mono text-[11px] font-medium">
+                        Public: {pubIp || 'N/A'}
+                      </code>
+                      <code className="block text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded font-mono text-[11px]">
+                        Private: {typeof srvInfo === 'object' && srvInfo ? srvInfo.private_ip || 'N/A' : 'N/A'}
+                      </code>
+                    </div>
                     {pubIp && (
                       <button
                         type="button"
@@ -808,6 +872,8 @@ const handleGroupChange = (
         <ClusterConfigurationForm
           onClose={() => setIsClusterConfigurationOpen(false)}
           provisionedServers={provisionedServers}
+          hideAuth={true}
+          userEmail={formData.user_email}
         />
       )}
     </>
