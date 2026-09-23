@@ -143,12 +143,10 @@ export default function HomePage() {
 
   // 3. Authenticated as Student (Progressive 36-vCPU Quota Verification)
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 py-10 px-4">
-      <StudentPortal
-        user={user}
-        onLogout={handleLogout}
-        onSwitchToAdmin={user.isAdmin ? () => setViewMode('admin') : undefined}
-      />
-    </div>
+    <StudentPortal
+      user={user}
+      onLogout={handleLogout}
+      onSwitchToAdmin={user.isAdmin ? () => setViewMode('admin') : undefined}
+    />
   );
 }

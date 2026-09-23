@@ -195,11 +195,12 @@ export default function StudentPortal({ user, onLogout }: Props) {
     setLiveStatusText('Loading your lab status...');
 
     try {
+      const emailPrefix = user.email ? user.email.split('@')[0] : '';
       const res = await fetch('/api/lab-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          lab_id: activeLabId || '',
+          lab_id: emailPrefix,
           user_name: userName.trim() || 'student',
           user_email: user.email,
           region: targetRegion,
@@ -243,8 +244,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
   // -------------------------------------------------------------
   // Verify AWS Credentials & 36-vCPU Quota
   // -------------------------------------------------------------
-  const handleVerifyAws = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleVerifyAws = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault();
     if (!awsAccessKey.trim() || !awsSecretKey.trim()) {
       setErrorMessage('Please enter both AWS Access Key and Secret Key.');
       setCredValidationStatus('invalid_account');
@@ -373,8 +374,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
   // -------------------------------------------------------------
   // Submit Form: Launch 16 Servers in 1 Region
   // -------------------------------------------------------------
-  const handleLaunchLab = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleLaunchLab = async (e?: React.FormEvent | React.MouseEvent) => {
+    e?.preventDefault();
     if (!awsAccessKey.trim() || !awsSecretKey.trim()) {
       setErrorMessage('Please enter and verify your AWS credentials before launching FreeLabs.');
       setCredValidationStatus('idle');
@@ -395,7 +396,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
     setProvisionedServers(null);
     setSetupState('in_progress');
 
-    const labId = `freelab_${Math.floor(Date.now() / 1000)}`;
+    const emailPrefix = user.email ? user.email.split('@')[0] : '';
+    const labId = emailPrefix || `freelab_${Math.floor(Date.now() / 1000)}`;
     setActiveLabId(labId);
     writeLabId(labId);
 
@@ -561,33 +563,36 @@ export default function StudentPortal({ user, onLogout }: Props) {
     isValidatingCreds || (credValidationStatus === 'valid' && hasAwsCredentials) || isSubmitting;
 
   return (
-    <div className="mx-auto max-w-xl bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
-      {/* Top Header */}
-      <div className="flex items-center justify-between border-b pb-4 mb-6">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">SoftMania FreeLabs</h2>
-          <p className="text-xs text-gray-500">
-            Logged in as: <span className="font-semibold text-gray-700">{user.email}</span>
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {user.isAdmin && (
-            <a
-              href="/admin"
-              className="text-xs font-semibold px-2.5 py-1 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 border border-purple-200 flex items-center gap-1"
+    <div className="min-h-screen bg-gray-50">
+      {/* Top Header Bar */}
+      <header className="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-sm">
+        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-2.5">
+            <span className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm">🎓</span>
+            <div>
+              <p className="text-sm font-bold text-gray-900 leading-none">SoftMania FreeLabs</p>
+              <p className="text-xs text-gray-500 leading-none mt-0.5">{user.email}</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {user.isAdmin && (
+              <a
+                href="/admin"
+                className="text-xs font-semibold px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 border border-purple-200 flex items-center gap-1 transition"
+              >
+                👑 Admin Console
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={onLogout}
+              className="text-xs text-red-600 hover:text-red-700 font-semibold px-3 py-1.5 rounded-lg border border-red-100 hover:bg-red-50 transition"
             >
-              👑 Admin Console
-            </a>
-          )}
-          <button
-            type="button"
-            onClick={onLogout}
-            className="text-xs text-red-600 hover:text-red-700 font-medium px-2 py-1"
-          >
-            Logout
-          </button>
+              Logout
+            </button>
+          </div>
         </div>
-      </div>
+      </header>
 
       {/* Cluster Configuration Modal */}
       {isClusterConfigOpen && (
@@ -597,60 +602,80 @@ export default function StudentPortal({ user, onLogout }: Props) {
         />
       )}
 
-      {/* STEP 1: AWS Credentials Input */}
-      <form onSubmit={handleVerifyAws} className="space-y-4">
-        <div>
-          <InputField
-            label="AWS Access Key"
-            name="aws_access_key"
-            value={awsAccessKey}
-            onChange={(e) => {
-              setAwsAccessKey(e.target.value);
-              resetAwsVerificationState();
-            }}
-            placeholder="AKIA..."
-            required
-            disabled={lockAwsCredentialFields}
-          />
-        </div>
+      {/* Page Content */}
+      <main className="max-w-lg mx-auto px-4 py-8 space-y-6">
 
-        <div>
-          <InputField
-            label="AWS Secret Key"
-            name="aws_secret_key"
-            type="password"
-            value={awsSecretKey}
-            onChange={(e) => {
-              setAwsSecretKey(e.target.value);
-              resetAwsVerificationState();
-            }}
-            placeholder="Enter your secret key"
-            required
-            disabled={lockAwsCredentialFields}
-          />
-        </div>
+        {/* STEP 1: AWS Credentials */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
+          <h2 className="text-base font-bold text-gray-900 border-b border-gray-100 pb-2">
+            Step 1: AWS Credentials
+          </h2>
+          
+          <div className="space-y-4">
+            <div>
+              <InputField
+                label="AWS Access Key"
+                name="aws_access_key"
+                value={awsAccessKey}
+                onChange={(e) => {
+                  setAwsAccessKey(e.target.value);
+                  resetAwsVerificationState();
+                }}
+                placeholder="AKIA..."
+                required
+                disabled={lockAwsCredentialFields}
+              />
+            </div>
 
-        {/* Action Button: Verify Account */}
-        {credValidationStatus !== 'valid' && (
-          <button
-            type="submit"
-            disabled={isValidatingCreds || !awsAccessKey.trim() || !awsSecretKey.trim()}
-            className="w-full py-2.5 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-          >
-            {isValidatingCreds ? (
-              <>
-                <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
-                <span>Verifying Account &amp; Quotas...</span>
-              </>
-            ) : (
-              <span>Verify AWS Account &amp; Quotas (36 vCPUs + 9 Elastic IPs)</span>
-            )}
-          </button>
-        )}
-      </form>
+            <div>
+              <InputField
+                label="AWS Secret Key"
+                name="aws_secret_key"
+                type="password"
+                value={awsSecretKey}
+                onChange={(e) => {
+                  setAwsSecretKey(e.target.value);
+                  resetAwsVerificationState();
+                }}
+                placeholder="Enter your secret key"
+                required
+                disabled={lockAwsCredentialFields}
+              />
+            </div>
+          </div>
+
+          {/* Action Buttons in Step 1 (Matching Admin) */}
+          {credValidationStatus !== 'valid' && (
+            <div className="flex flex-wrap gap-3 items-center pt-2">
+              <button
+                type="button"
+                disabled={isValidatingCreds || !awsAccessKey.trim() || !awsSecretKey.trim()}
+                onClick={handleVerifyAws}
+                className="flex-1 py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isValidatingCreds ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span>Verifying...</span>
+                  </>
+                ) : (
+                  <span>Verify AWS Account &amp; Quotas</span>
+                )}
+              </button>
+              <button
+                type="button"
+                disabled={isLoadingDashboard || !awsAccessKey.trim() || !awsSecretKey.trim()}
+                onClick={handleLoadDashboardStatus}
+                className="flex-1 py-2.5 px-4 rounded-lg bg-white border border-gray-300 text-gray-700 text-sm font-semibold hover:bg-gray-50 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                title="Load your existing active servers"
+              >
+                {isLoadingDashboard ? 'Loading...' : 'Load Dashboard'}
+              </button>
+            </div>
+          )}
 
       {/* ERROR STATES: RED TEXT MESSAGES */}
       {credValidationStatus === 'invalid_account' && (
@@ -735,38 +760,45 @@ export default function StudentPortal({ user, onLogout }: Props) {
 
       {/* SUCCESS BADGE */}
       {credValidationStatus === 'valid' && successBadge && (
-        <div className="mt-4 p-3 bg-green-50 border border-green-200 text-green-800 text-xs rounded-xl flex items-center justify-between">
-          <span>{successBadge}</span>
-          <div className="flex items-center gap-3 ml-2">
-            <button
-              type="button"
-              onClick={handleLoadDashboardStatus}
-              disabled={isLoadingDashboard || !hasAwsCredentials}
-              className="text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-2.5 py-1 rounded"
-            >
-              {isLoadingDashboard ? 'Loading...' : 'Load Dashboard'}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                resetAwsVerificationState();
-              }}
-              className="text-[11px] text-green-700 underline hover:text-green-900"
-            >
-              Change Keys
-            </button>
-          </div>
+        <div className="p-3.5 bg-green-50 border border-green-200 text-green-800 text-xs rounded-lg">
+          <p className="font-medium leading-relaxed">{successBadge}</p>
         </div>
       )}
 
-      {/* STEP 2: UNLOCKED FORM (Only visible after valid credentials & >= 36 vCPUs) */}
-      {credValidationStatus === 'valid' && hasAwsCredentials && (
-        <form onSubmit={handleLaunchLab} className="mt-6 pt-6 border-t border-gray-200 space-y-4">
-          <div className="flex items-center justify-between bg-blue-50/60 p-3 rounded-lg border border-blue-100">
-            <div>
-              <p className="text-xs font-semibold text-blue-900">Target Region</p>
-              <p className="text-xs text-blue-700">{targetRegion} — 1 Single Region</p>
+        </div>{/* end Step 1 card */}
+
+        {/* STEP 2: Configuration & Launch */}
+        {credValidationStatus === 'valid' && hasAwsCredentials && (
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
+            <div className="flex items-center justify-between border-b border-gray-100 pb-2">
+              <h2 className="text-base font-bold text-gray-900">
+                Step 2: Configuration & Launch
+              </h2>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleLoadDashboardStatus}
+                  disabled={isLoadingDashboard || !hasAwsCredentials}
+                  className="text-xs font-semibold px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 border border-blue-200 transition disabled:opacity-50"
+                >
+                  {isLoadingDashboard ? 'Loading...' : 'Load Dashboard'}
+                </button>
+                <button
+                  type="button"
+                  onClick={resetAwsVerificationState}
+                  className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+                >
+                  Change AWS Keys
+                </button>
+              </div>
             </div>
+
+            <div className="space-y-4">
+              <div className="flex items-center justify-between bg-blue-50/60 p-3 rounded-lg border border-blue-100">
+                <div>
+                  <p className="text-xs font-semibold text-blue-900">Target Region</p>
+                  <p className="text-xs text-blue-700">{targetRegion} — 1 Single Region</p>
+                </div>
             <div className="flex gap-2">
               <span className="text-[11px] bg-blue-100 text-blue-800 font-medium px-2 py-0.5 rounded">
                 {quotaDetails?.available_vcpus ?? 36} vCPUs Verified
@@ -830,7 +862,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
 
           {/* Launch Button */}
           <button
-            type="submit"
+            type="button"
+            onClick={handleLaunchLab}
             disabled={isSubmitting || !keyPairName.trim()}
             className="w-full py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold rounded-xl shadow-lg hover:from-blue-700 hover:to-indigo-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
@@ -846,62 +879,68 @@ export default function StudentPortal({ user, onLogout }: Props) {
               <span>🚀 Launch FreeLabs Environment</span>
             )}
           </button>
-        </form>
-      )}
+        </div>
+      </div>
+    )}
 
       {/* PROVISIONING PROGRESS & STATUS */}
       {setupState === 'in_progress' && (
-        <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-xl text-center">
-          <p className="text-sm font-semibold text-blue-900 animate-pulse">{liveStatusText}</p>
-          <p className="text-xs text-blue-600 mt-1">Time elapsed: {elapsedSeconds}s</p>
+        <div className="bg-white rounded-xl shadow-sm border border-blue-200 overflow-hidden">
+          <div className="p-6 bg-blue-50 text-center">
+            <p className="text-sm font-semibold text-blue-900 animate-pulse">{liveStatusText}</p>
+            <p className="text-xs text-blue-600 mt-1">Time elapsed: {elapsedSeconds}s</p>
+          </div>
         </div>
       )}
 
       {/* ERROR DURING PROVISIONING */}
       {setupState === 'error' && errorMessage && (
-        <div className="mt-6 p-4 bg-red-50 border border-red-200 rounded-xl text-center">
-          <p className="text-xs font-semibold text-red-700">{errorMessage}</p>
+        <div className="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
+          <div className="p-6 bg-red-50 text-center">
+            <p className="text-xs font-semibold text-red-700">{errorMessage}</p>
+          </div>
         </div>
       )}
 
       {/* COMPLETED SERVERS DISPLAY */}
       {setupState === 'completed' && provisionedServers && (
-        <div className="mt-6 pt-4 border-t border-gray-200">
-          <div className="flex items-center justify-between mb-3">
+        <div className="bg-white rounded-xl shadow-sm border border-green-200 overflow-hidden">
+          <div className="px-6 py-4 border-b border-green-100 bg-green-50/60 flex items-center justify-between">
             <span className="text-sm font-bold text-green-700">
               ✅ All 16 Servers Created in us-east-1!
             </span>
             <button
               type="button"
               onClick={() => setIsClusterConfigOpen(true)}
-              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow transition"
             >
               Cluster Configuration →
             </button>
           </div>
+          <div className="p-6">
+            <div className="max-h-64 overflow-y-auto space-y-1 bg-gray-50 p-3 rounded-lg border text-xs">
+              {Object.entries(provisionedServers).map(([sName, sData]) => (
+                <div key={sName} className="flex justify-between items-center py-1.5 border-b last:border-0">
+                  <span className="font-semibold text-gray-800">{sName}</span>
+                  <span className="text-right text-gray-600 font-mono">
+                    <span className="block">Public: {sData.public_ip || 'N/A'}</span>
+                    <span className="block text-[11px] text-gray-500">Private: {sData.private_ip || 'N/A'}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
 
-          <div className="max-h-52 overflow-y-auto space-y-1 bg-gray-50 p-2.5 rounded-lg border text-xs">
-            {Object.entries(provisionedServers).map(([sName, sData]) => (
-              <div key={sName} className="flex justify-between items-center py-1 border-b last:border-0">
-                <span className="font-semibold text-gray-800">{sName}</span>
-                <span className="text-right text-gray-600 font-mono">
-                  <span className="block">Public: {sData.public_ip || 'N/A'}</span>
-                  <span className="block text-[11px] text-gray-500">Private: {sData.private_ip || 'N/A'}</span>
-                </span>
-              </div>
-            ))}
-          </div>
-
-          {/* Terminate Button */}
-          <div className="mt-4 pt-3 border-t flex justify-end">
-            <button
-              type="button"
-              onClick={handleTerminateLab}
-              disabled={terminateLoading}
-              className="text-xs text-red-600 hover:text-red-800 font-semibold px-3 py-1.5 border border-red-200 rounded-lg hover:bg-red-50 transition"
-            >
-              {terminateLoading ? 'Terminating...' : '🗑️ Terminate All Lab Servers'}
-            </button>
+            {/* Terminate Button */}
+            <div className="mt-4 pt-3 border-t flex justify-end">
+              <button
+                type="button"
+                onClick={handleTerminateLab}
+                disabled={terminateLoading}
+                className="text-xs text-red-600 hover:text-red-800 font-semibold px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition"
+              >
+                {terminateLoading ? 'Terminating...' : '🗑️ Terminate All Lab Servers'}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -909,6 +948,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
       {terminateMessage && (
         <p className="text-xs text-center mt-3 font-semibold text-gray-700">{terminateMessage}</p>
       )}
+
+      </main>
     </div>
   );
 }

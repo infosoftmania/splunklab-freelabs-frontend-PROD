@@ -131,7 +131,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const lab_id = raw_lab_id || `freelab_${Math.floor(Date.now() / 1000)}`;
+    const emailPrefix = user_email ? user_email.split('@')[0] : '';
+    const lab_id = raw_lab_id || emailPrefix || `freelab_${Math.floor(Date.now() / 1000)}`;
 
     const backendPayload: Record<string, any> = {
       action: 'PROVISION',

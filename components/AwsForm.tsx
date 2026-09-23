@@ -254,7 +254,6 @@ const handleGroupChange = (
         } else if (formData.region) {
           fetchKeyPairsForRegion(formData.region);
         }
-        if (activeLabId) startPollingStatus(activeLabId, data.region || formData.region, formData.user_email, formData.user_name);
       }
     } catch (err) {
       console.error(err);
@@ -371,8 +370,9 @@ const handleGroupChange = (
   // Check Existing Running Servers
   // -------------------------
   const checkExistingStatus = async () => {
-    if (!formData.aws_access_key || !formData.aws_secret_key || !formData.region || !formData.user_name.trim()) {
-      setSuccessMessage('❌ Enter AWS credentials, region, and username to check existing status');
+    const checkRegion = formData.region || 'us-east-1';
+    if (!formData.aws_access_key || !formData.aws_secret_key || !formData.user_name.trim()) {
+      setSuccessMessage('❌ Enter AWS credentials and username to check existing status');
       return;
     }
 
@@ -380,14 +380,15 @@ const handleGroupChange = (
     setSuccessMessage('Checking for running servers in your AWS account...');
 
     try {
+      const emailPrefix = formData.user_email ? formData.user_email.split('@')[0] : '';
       const res = await fetch('/api/lab-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          lab_id: activeLabId || '',
+          lab_id: emailPrefix,
           user_name: formData.user_name.trim(),
           user_email: formData.user_email.trim(),
-          region: formData.region,
+          region: checkRegion,
           aws_access_key: formData.aws_access_key,
           aws_secret_key: formData.aws_secret_key,
         }),
@@ -428,7 +429,8 @@ const handleGroupChange = (
     setProvisionedServers(null);
     setSetupState('in_progress');
 
-    const labId = `freelab_${Math.floor(Date.now() / 1000)}`;
+    const emailPrefix = formData.user_email ? formData.user_email.split('@')[0] : '';
+    const labId = emailPrefix || formData.user_name.trim() || `freelab_${Math.floor(Date.now() / 1000)}`;
     setActiveLabId(labId);
     writeLabId(labId);
 
@@ -570,13 +572,23 @@ const handleGroupChange = (
             <h2 className="text-base font-bold text-gray-900">
               Step 2: Configuration & Launch
             </h2>
-            <button
-              type="button"
-              onClick={() => { setAwsValid(null); setAwsAccessMessage(''); setAwsSecretMessage(''); }}
-              className="text-xs text-blue-600 hover:text-blue-800 font-medium"
-            >
-              Change AWS Keys
-            </button>
+            <div className="flex items-center gap-2.5">
+              <button
+                type="button"
+                disabled={isCheckingStatus || !formData.aws_access_key || !formData.user_name.trim()}
+                onClick={checkExistingStatus}
+                className="text-xs font-semibold px-2.5 py-1 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 border border-blue-200 transition disabled:opacity-50"
+              >
+                {isCheckingStatus ? 'Loading...' : 'Load Dashboard'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAwsValid(null); setAwsAccessMessage(''); setAwsSecretMessage(''); }}
+                className="text-xs text-blue-600 hover:text-blue-800 font-medium"
+              >
+                Change AWS Keys
+              </button>
+            </div>
           </div>
           <div className="space-y-4">
 
@@ -744,7 +756,7 @@ const handleGroupChange = (
           ? 'Environment setup in progress...'
           : isSubmitting
           ? 'Starting Provisioning...'
-          : 'Create Environment'}
+          : '🚀 Create Environment'}
       </button>
 
       </div>
