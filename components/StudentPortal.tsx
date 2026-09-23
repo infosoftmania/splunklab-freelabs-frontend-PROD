@@ -1,9 +1,20 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useCallback, useState, useEffect, useRef } from 'react';
 import InputField from './InputField';
 import KeyDownloadButton from './KeyDownloadButton';
 import ClusterConfigurationForm from './ClusterConfigurationForm';
+import {
+  readAwsCredentials,
+  readLabId,
+  removeAwsCredentials,
+  removeLegacyLabSnapshot,
+  removeAwsVerification,
+  removeLabId,
+  writeAwsCredentials,
+  writeLabId,
+  type StoredLabServer,
+} from '../lib/lab-storage';
 
 type StudentUser = {
   name: string;
@@ -18,15 +29,46 @@ type Props = {
   onSwitchToAdmin?: () => void;
 };
 
-export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props) {
+type CredValidationStatus = 'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu' | 'insufficient_eip';
+
+type QuotaDetails = {
+  available_vcpus?: number;
+  region?: string;
+  total_quota?: number;
+  permission_denied?: boolean;
+};
+
+const formatVerificationTime = (validatedAt?: string) => {
+  if (!validatedAt) return '';
+
+  const parsedDate = new Date(validatedAt);
+  if (Number.isNaN(parsedDate.getTime())) return '';
+
+  return parsedDate.toLocaleString();
+};
+
+const buildVerificationBadge = (
+  availableVcpus: number | undefined,
+  region: string,
+  validatedAt?: string,
+  hasAwsCredentials = true
+) => {
+  const verifiedTime = formatVerificationTime(validatedAt);
+  const timeText = verifiedTime ? ` Last verified ${verifiedTime}.` : '';
+  const credentialText = hasAwsCredentials ? ' Ready to configure.' : ' Re-enter AWS keys to continue.';
+
+  return `AWS Account Verified! Found ${availableVcpus ?? 36} vCPUs in ${region}.${credentialText}${timeText}`;
+};
+
+export default function StudentPortal({ user, onLogout }: Props) {
   // Step 1: AWS Credentials (held in component memory only)
   const [awsAccessKey, setAwsAccessKey] = useState('');
   const [awsSecretKey, setAwsSecretKey] = useState('');
   const [isValidatingCreds, setIsValidatingCreds] = useState(false);
-  const [credValidationStatus, setCredValidationStatus] = useState<'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu' | 'insufficient_eip'>('idle');
+  const [credValidationStatus, setCredValidationStatus] = useState<CredValidationStatus>('idle');
   const [errorMessage, setErrorMessage] = useState('');
   const [successBadge, setSuccessBadge] = useState('');
-  const [quotaDetails, setQuotaDetails] = useState<{ available_vcpus?: number; region?: string; total_quota?: number; permission_denied?: boolean } | null>(null);
+  const [quotaDetails, setQuotaDetails] = useState<QuotaDetails | null>(null);
   const [eipDetails, setEipDetails] = useState<{ available_eips?: number; required_eips?: number; region?: string; total_quota?: number } | null>(null);
 
   // Step 2: Unlocked Details (Dynamic single region with >= 36 vCPUs)
@@ -38,11 +80,12 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
   // Step 3: Provisioning & Polling
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
   const [activeLabId, setActiveLabId] = useState<string | null>(null);
   const [setupState, setSetupState] = useState<'idle' | 'in_progress' | 'completed' | 'error'>('idle');
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [liveStatusText, setLiveStatusText] = useState('');
-  const [provisionedServers, setProvisionedServers] = useState<Record<string, any> | null>(null);
+  const [provisionedServers, setProvisionedServers] = useState<Record<string, StoredLabServer> | null>(null);
   const [isClusterConfigOpen, setIsClusterConfigOpen] = useState(false);
   const [terminateLoading, setTerminateLoading] = useState(false);
   const [terminateMessage, setTerminateMessage] = useState('');
@@ -50,12 +93,85 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  const fetchKeyPairs = useCallback(async (ak: string, sk: string, reg: string) => {
+    setKeyPairsLoading(true);
+    try {
+      const res = await fetch('/api/list-keypairs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          aws_access_key: ak,
+          aws_secret_key: sk,
+          region: reg,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.keyPairs)) {
+        setKeyPairsList(data.keyPairs);
+        if (data.keyPairs.length > 0) {
+          setKeyPairName((currentKeyPairName) => currentKeyPairName || data.keyPairs[0]);
+        }
+      }
+    } catch (err) {
+      console.warn('[FETCH-KEYPAIRS] Failed:', err);
+    } finally {
+      setKeyPairsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
+    const storedLabId = readLabId();
+    if (storedLabId) setActiveLabId(storedLabId);
+    removeLegacyLabSnapshot(user.email);
+
+    const storedAwsCredentials = readAwsCredentials(user.email);
+    if (storedAwsCredentials) {
+      setAwsAccessKey(storedAwsCredentials.accessKey);
+      setAwsSecretKey(storedAwsCredentials.secretKey);
+      const restoredRegion = storedAwsCredentials.region || 'us-east-1';
+      const restoredQuota: QuotaDetails = {
+        available_vcpus: storedAwsCredentials.available_vcpus,
+        region: restoredRegion,
+        total_quota: storedAwsCredentials.total_quota,
+        permission_denied: storedAwsCredentials.permission_denied,
+      };
+
+      setTargetRegion(restoredRegion);
+      if (storedAwsCredentials.status) {
+        setCredValidationStatus(storedAwsCredentials.status);
+        setQuotaDetails(restoredQuota);
+      }
+
+      if (storedAwsCredentials.status === 'valid') {
+        setSuccessBadge(
+          buildVerificationBadge(
+            storedAwsCredentials.available_vcpus,
+            restoredRegion,
+            storedAwsCredentials.validatedAt,
+            true
+          )
+        );
+        fetchKeyPairs(storedAwsCredentials.accessKey, storedAwsCredentials.secretKey, restoredRegion);
+      } else if (storedAwsCredentials.status === 'insufficient_vcpu') {
+        setErrorMessage(storedAwsCredentials.message || 'Previous AWS validation did not pass.');
+      }
+    }
+    removeAwsVerification(user.email);
+
     return () => {
       if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
     };
-  }, []);
+  }, [fetchKeyPairs, user.email]);
+
+  const resetAwsVerificationState = () => {
+    setCredValidationStatus('idle');
+    setErrorMessage('');
+    setSuccessBadge('');
+    setQuotaDetails(null);
+    removeAwsCredentials(user.email);
+    removeAwsVerification(user.email);
+  };
 
   const stopAllIntervals = () => {
     if (pollIntervalRef.current) {
@@ -68,6 +184,62 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
     }
   };
 
+  const handleLoadDashboardStatus = async () => {
+    if (!awsAccessKey.trim() || !awsSecretKey.trim()) {
+      setErrorMessage('Enter your AWS credentials before loading the dashboard.');
+      return;
+    }
+
+    setIsLoadingDashboard(true);
+    setErrorMessage('');
+    setLiveStatusText('Loading your lab status...');
+
+    try {
+      const res = await fetch('/api/lab-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          lab_id: activeLabId || '',
+          user_name: userName.trim() || 'student',
+          user_email: user.email,
+          region: targetRegion,
+          aws_access_key: awsAccessKey.trim(),
+          aws_secret_key: awsSecretKey.trim(),
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.message || 'Unable to load lab status.');
+      }
+
+      const servers = (data.servers || {}) as Record<string, StoredLabServer>;
+      const labId = data.lab_id || activeLabId || '';
+      const serverCount = Object.keys(servers).length;
+      const readyWithIps = Object.values(servers).filter(
+        (server) => server.public_ip && server.public_ip !== 'N/A'
+      ).length;
+      const isComplete = serverCount >= 16 && readyWithIps >= 16;
+
+      if (labId) {
+        setActiveLabId(labId);
+        writeLabId(labId);
+      }
+
+      if (serverCount > 0) {
+        setProvisionedServers(servers);
+        setSetupState(isComplete ? 'completed' : 'in_progress');
+        setLiveStatusText(`${serverCount} lab servers found (${readyWithIps} ready with public IPs).`);
+      } else {
+        setLiveStatusText('No active lab servers found.');
+      }
+    } catch (err: unknown) {
+      setErrorMessage(err instanceof Error ? err.message : 'Unable to load lab status.');
+    } finally {
+      setIsLoadingDashboard(false);
+    }
+  };
+
   // -------------------------------------------------------------
   // Verify AWS Credentials & 36-vCPU Quota
   // -------------------------------------------------------------
@@ -76,6 +248,8 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
     if (!awsAccessKey.trim() || !awsSecretKey.trim()) {
       setErrorMessage('Please enter both AWS Access Key and Secret Key.');
       setCredValidationStatus('invalid_account');
+      removeAwsCredentials(user.email);
+      removeAwsVerification(user.email);
       return;
     }
 
@@ -104,8 +278,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
       const data = await res.json();
 
       if (!data.valid_account) {
+        const message = data.message || 'Invalid AWS Credentials. Account not found or inactive.';
         setCredValidationStatus('invalid_account');
-        setErrorMessage(data.message || 'Invalid AWS Credentials. Account not found or inactive.');
+        setErrorMessage(message);
+        removeAwsCredentials(user.email);
+        removeAwsVerification(user.email);
         return;
       }
 
@@ -117,8 +294,20 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
           total_quota: data.total_quota,
           permission_denied: Boolean(data.permission_denied),
         };
+        const message = data.message || `Insufficient vCPU Quota: Found ${data.available_vcpus ?? 0} vCPUs in ${targetRegion}. At least 36 vCPUs in one region are required. Please request an increase up to 36+ vCPUs in AWS Service Quotas.`;
         setQuotaDetails(quotaInfo);
-        setErrorMessage(data.message || `Insufficient vCPU Quota: Found ${data.available_vcpus ?? 0} vCPUs in ${targetRegion}. At least 36 vCPUs in one region are required. Please request an increase up to 36+ vCPUs in AWS Service Quotas.`);
+        setErrorMessage(message);
+        writeAwsCredentials(user.email, {
+          accessKey: awsAccessKey.trim(),
+          secretKey: awsSecretKey.trim(),
+          status: 'insufficient_vcpu',
+          ...quotaInfo,
+          message,
+          account_id: data.account_id,
+          validatedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
+        removeAwsVerification(user.email);
         return;
       }
 
@@ -137,7 +326,8 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
       // PASSED: Valid account, >= 36 vCPUs, and >= 9 Elastic IPs!
       const verifiedRegion = data.region || targetRegion || 'us-east-1';
-      const badge = `✅ AWS Account Verified! Found ${data.available_vcpus} vCPUs & ${data.available_eips ?? 9} Elastic IPs in ${verifiedRegion}. Ready to configure.`;
+      const validatedAt = new Date().toISOString();
+      const badge = buildVerificationBadge(data.available_vcpus, verifiedRegion, validatedAt);
       const verifiedQuota = {
         available_vcpus: data.available_vcpus,
         region: verifiedRegion,
@@ -154,41 +344,29 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         total_quota: data.total_eip_quota,
       });
       setSuccessBadge(badge);
+      writeAwsCredentials(user.email, {
+        accessKey: awsAccessKey.trim(),
+        secretKey: awsSecretKey.trim(),
+        status: 'valid',
+        ...verifiedQuota,
+        account_id: data.account_id,
+        message: data.message,
+        validatedAt,
+        updatedAt: validatedAt,
+      });
+      removeAwsVerification(user.email);
 
       // Fetch Key Pairs for the verified region
       fetchKeyPairs(awsAccessKey.trim(), awsSecretKey.trim(), verifiedRegion);
-    } catch (err: any) {
+      if (activeLabId) startPollingStatus(activeLabId, verifiedRegion);
+    } catch (err: unknown) {
       console.error('[STUDENT-VERIFY] Error:', err);
       setCredValidationStatus('invalid_account');
-      setErrorMessage(err?.message || 'Failed to connect to AWS validation service. Please check your credentials and internet connection.');
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to connect to AWS validation service. Please check your credentials and internet connection.');
+      removeAwsCredentials(user.email);
+      removeAwsVerification(user.email);
     } finally {
       setIsValidatingCreds(false);
-    }
-  };
-
-  const fetchKeyPairs = async (ak: string, sk: string, reg: string) => {
-    setKeyPairsLoading(true);
-    try {
-      const res = await fetch('/api/list-keypairs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          aws_access_key: ak,
-          aws_secret_key: sk,
-          region: reg,
-        }),
-      });
-      const data = await res.json();
-      if (data.success && Array.isArray(data.keyPairs)) {
-        setKeyPairsList(data.keyPairs);
-        if (data.keyPairs.length > 0 && !keyPairName) {
-          setKeyPairName(data.keyPairs[0]);
-        }
-      }
-    } catch (err) {
-      console.warn('[FETCH-KEYPAIRS] Failed:', err);
-    } finally {
-      setKeyPairsLoading(false);
     }
   };
 
@@ -197,6 +375,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
   // -------------------------------------------------------------
   const handleLaunchLab = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!awsAccessKey.trim() || !awsSecretKey.trim()) {
+      setErrorMessage('Please enter and verify your AWS credentials before launching FreeLabs.');
+      setCredValidationStatus('idle');
+      return;
+    }
     if (credValidationStatus !== 'valid') {
       setErrorMessage('Please verify your AWS credentials and quotas (36+ vCPUs and 9+ Elastic IPs) first.');
       return;
@@ -214,8 +397,9 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
     const labId = `freelab_${Math.floor(Date.now() / 1000)}`;
     setActiveLabId(labId);
+    writeLabId(labId);
 
-    startPollingStatus(labId);
+    startPollingStatus(labId, targetRegion);
 
     try {
       const res = await fetch('/api/submit-form', {
@@ -236,12 +420,13 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
       const data = await res.json();
       if (data.status === 'IN_PROGRESS' || res.status === 200) {
-        const servers = data.data?.servers || data.servers;
+        const servers = (data.data?.servers || data.servers) as Record<string, StoredLabServer> | undefined;
         if (servers && typeof servers === 'object' && Object.keys(servers).length >= 16) {
           stopAllIntervals();
           setProvisionedServers(servers);
           setSetupState('completed');
           setIsSubmitting(false);
+          writeLabId(labId);
         }
         return;
       }
@@ -260,7 +445,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
   // -------------------------------------------------------------
   // Polling for Provisioned Servers
   // -------------------------------------------------------------
-  const startPollingStatus = (labId: string) => {
+  const startPollingStatus = (labId: string, currentRegion?: string) => {
     stopAllIntervals();
     setElapsedSeconds(0);
     const initialStatus = 'Initiating 16 servers in us-east-1 on AWS...';
@@ -282,7 +467,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
             lab_id: labId,
             user_name: userName.trim() || 'student',
             user_email: user.email,
-            region: targetRegion,
+            region: currentRegion || targetRegion,
             aws_access_key: awsAccessKey.trim(),
             aws_secret_key: awsSecretKey.trim(),
           }),
@@ -292,10 +477,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
 
         const data = await res.json();
         if (data.success && data.instance_count > 0) {
-          const servers = data.servers || {};
+          const servers = (data.servers || {}) as Record<string, StoredLabServer>;
+          writeLabId(labId);
           const serverCount = Object.keys(servers).length;
           const readyWithIps = Object.values(servers).filter(
-            (s: any) => s.public_ip && s.public_ip !== 'N/A'
+            (server) => server.public_ip && server.public_ip !== 'N/A'
           ).length;
 
           const statusMsg = `${serverCount}/16 servers created in us-east-1 (${readyWithIps} ready with Public IPs)...`;
@@ -306,6 +492,7 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
             setProvisionedServers(servers);
             setSetupState('completed');
             setIsSubmitting(false);
+            writeLabId(labId);
           }
         }
       } catch (err) {
@@ -355,16 +542,23 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
         stopAllIntervals();
         setProvisionedServers(null);
         setSetupState('idle');
+        removeLabId();
         setTerminateMessage('✅ All lab servers have been terminated successfully.');
       } else {
         setTerminateMessage(`❌ Failed to terminate: ${data.message || 'Error'}`);
       }
-    } catch (err: any) {
-      setTerminateMessage(`❌ Error terminating lab: ${err?.message || 'Failed'}`);
+    } catch (err: unknown) {
+      setTerminateMessage(
+        `❌ Error terminating lab: ${err instanceof Error ? err.message : 'Failed'}`
+      );
     } finally {
       setTerminateLoading(false);
     }
   };
+
+  const hasAwsCredentials = Boolean(awsAccessKey.trim() && awsSecretKey.trim());
+  const lockAwsCredentialFields =
+    isValidatingCreds || (credValidationStatus === 'valid' && hasAwsCredentials) || isSubmitting;
 
   return (
     <div className="mx-auto max-w-xl bg-white rounded-2xl shadow-xl p-8 border border-gray-100">
@@ -412,12 +606,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
             value={awsAccessKey}
             onChange={(e) => {
               setAwsAccessKey(e.target.value);
-              setCredValidationStatus('idle');
-              setErrorMessage('');
+              resetAwsVerificationState();
             }}
             placeholder="AKIA..."
             required
-            disabled={isValidatingCreds || credValidationStatus === 'valid' || isSubmitting}
+            disabled={lockAwsCredentialFields}
           />
         </div>
 
@@ -429,12 +622,11 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
             value={awsSecretKey}
             onChange={(e) => {
               setAwsSecretKey(e.target.value);
-              setCredValidationStatus('idle');
-              setErrorMessage('');
+              resetAwsVerificationState();
             }}
             placeholder="Enter your secret key"
             required
-            disabled={isValidatingCreds || credValidationStatus === 'valid' || isSubmitting}
+            disabled={lockAwsCredentialFields}
           />
         </div>
 
@@ -545,21 +737,30 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
       {credValidationStatus === 'valid' && successBadge && (
         <div className="mt-4 p-3 bg-green-50 border border-green-200 text-green-800 text-xs rounded-xl flex items-center justify-between">
           <span>{successBadge}</span>
-          <button
-            type="button"
-            onClick={() => {
-              setCredValidationStatus('idle');
-              setSuccessBadge('');
-            }}
-            className="text-[11px] text-green-700 underline hover:text-green-900 ml-2"
-          >
-            Change Keys
-          </button>
+          <div className="flex items-center gap-3 ml-2">
+            <button
+              type="button"
+              onClick={handleLoadDashboardStatus}
+              disabled={isLoadingDashboard || !hasAwsCredentials}
+              className="text-[11px] font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 px-2.5 py-1 rounded"
+            >
+              {isLoadingDashboard ? 'Loading...' : 'Load Dashboard'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                resetAwsVerificationState();
+              }}
+              className="text-[11px] text-green-700 underline hover:text-green-900"
+            >
+              Change Keys
+            </button>
+          </div>
         </div>
       )}
 
-      {/* STEP 2: UNLOCKED FORM (Only visible after valid credentials & >= 36 vCPUs & >= 9 EIPs) */}
-      {credValidationStatus === 'valid' && (
+      {/* STEP 2: UNLOCKED FORM (Only visible after valid credentials & >= 36 vCPUs) */}
+      {credValidationStatus === 'valid' && hasAwsCredentials && (
         <form onSubmit={handleLaunchLab} className="mt-6 pt-6 border-t border-gray-200 space-y-4">
           <div className="flex items-center justify-between bg-blue-50/60 p-3 rounded-lg border border-blue-100">
             <div>
@@ -680,10 +881,13 @@ export default function StudentPortal({ user, onLogout, onSwitchToAdmin }: Props
           </div>
 
           <div className="max-h-52 overflow-y-auto space-y-1 bg-gray-50 p-2.5 rounded-lg border text-xs">
-            {Object.entries(provisionedServers).map(([sName, sData]: [string, any]) => (
+            {Object.entries(provisionedServers).map(([sName, sData]) => (
               <div key={sName} className="flex justify-between items-center py-1 border-b last:border-0">
                 <span className="font-semibold text-gray-800">{sName}</span>
-                <span className="text-gray-600 font-mono">{sData.public_ip || sData.private_ip || 'N/A'}</span>
+                <span className="text-right text-gray-600 font-mono">
+                  <span className="block">Public: {sData.public_ip || 'N/A'}</span>
+                  <span className="block text-[11px] text-gray-500">Private: {sData.private_ip || 'N/A'}</span>
+                </span>
               </div>
             ))}
           </div>
