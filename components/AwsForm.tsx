@@ -406,7 +406,7 @@ const handleGroupChange = (
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          lab_id: emailPrefix,
+          lab_id: activeLabId || emailPrefix,
           user_name: formData.user_name.trim(),
           user_email: formData.user_email.trim(),
           region: checkRegion,

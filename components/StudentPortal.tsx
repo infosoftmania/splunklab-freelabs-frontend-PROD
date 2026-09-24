@@ -76,6 +76,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
   const [keyPairName, setKeyPairName] = useState('');
   const [keyPairsList, setKeyPairsList] = useState<string[]>([]);
   const [keyPairsLoading, setKeyPairsLoading] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const keyPairDropdownRef = useRef<HTMLDivElement | null>(null);
   const [userName, setUserName] = useState(() => user.name || user.email.split('@')[0] || 'student');
 
   // Step 3: Provisioning & Polling
@@ -166,6 +168,16 @@ export default function StudentPortal({ user, onLogout }: Props) {
     };
   }, [fetchKeyPairs, user.email]);
 
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (keyPairDropdownRef.current && !keyPairDropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
   const resetAwsVerificationState = () => {
     setCredValidationStatus('idle');
     setErrorMessage('');
@@ -202,7 +214,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          lab_id: emailPrefix,
+          lab_id: activeLabId || emailPrefix,
           user_name: userName.trim() || 'student',
           user_email: user.email,
           region: targetRegion,
@@ -361,7 +373,6 @@ export default function StudentPortal({ user, onLogout }: Props) {
 
       // Fetch Key Pairs for the verified region
       fetchKeyPairs(awsAccessKey.trim(), awsSecretKey.trim(), verifiedRegion);
-      if (activeLabId) startPollingStatus(activeLabId, verifiedRegion);
     } catch (err: unknown) {
       console.error('[STUDENT-VERIFY] Error:', err);
       setCredValidationStatus('invalid_account');
@@ -824,39 +835,74 @@ export default function StudentPortal({ user, onLogout }: Props) {
             </div>
           </div>
 
-          {/* Key Pair Selection */}
-          <div>
-            <label className="block text-xs font-bold uppercase tracking-wider text-gray-700 mb-1">
-              EC2 Key Pair ({targetRegion})
+          {/* PEM Key section — Admin styled custom dropdown */}
+          <div ref={keyPairDropdownRef} className="relative w-full">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              PEM Key Name
             </label>
-            <div className="flex gap-2">
-              <input
-                type="text"
-                list="keypairs-list"
-                value={keyPairName}
-                onChange={(e) => setKeyPairName(e.target.value)}
-                placeholder="Select or enter your key pair name"
-                className="w-full border rounded px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                required
-                disabled={isSubmitting}
-              />
-              <datalist id="keypairs-list">
-                {keyPairsList.map((kp) => (
-                  <option key={kp} value={kp} />
-                ))}
-              </datalist>
-              <KeyDownloadButton
-                awsAccessKey={awsAccessKey}
-                awsSecretKey={awsSecretKey}
-                region={targetRegion}
-                keyPairName={keyPairName}
-                disabled={!keyPairName.trim() || isSubmitting}
-              />
-            </div>
+
+            <input
+              type="text"
+              name="key_pair_name"
+              value={keyPairsLoading ? 'Loading key pairs…' : keyPairName}
+              onChange={(e) => setKeyPairName(e.target.value)}
+              placeholder="Select or enter PEM key name"
+              disabled={keyPairsLoading || isSubmitting}
+              className={`mt-1 block w-full h-[48px] rounded-md shadow-sm px-3 pr-10 text-sm border text-gray-900 ${
+                keyPairsLoading
+                  ? 'bg-gray-100 cursor-not-allowed border-gray-300'
+                  : 'border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500'
+              }`}
+              onFocus={() => !keyPairsLoading && setShowDropdown(true)}
+              autoComplete="off"
+              required
+            />
+
+            {/* Loading spinner */}
             {keyPairsLoading && (
-              <p className="text-[11px] text-gray-400 mt-1">Loading key pairs from {targetRegion}...</p>
+              <div className="absolute right-3 top-12 -translate-y-1/2">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+              </div>
+            )}
+
+            {/* Dropdown arrow */}
+            {!keyPairsLoading && keyPairsList.length > 0 && (
+              <button
+                type="button"
+                className="absolute right-2 top-12 -translate-y-1/2 text-gray-500 hover:text-gray-700 p-1"
+                onClick={() => setShowDropdown((prev) => !prev)}
+              >
+                ▼
+              </button>
+            )}
+
+            {/* Dropdown list */}
+            {!keyPairsLoading && showDropdown && keyPairsList.length > 0 && (
+              <ul className="absolute z-20 mt-1 w-full max-h-48 overflow-auto rounded-md border border-gray-300 bg-white shadow-lg text-sm text-gray-900">
+                {keyPairsList.map((kp) => (
+                  <li
+                    key={kp}
+                    className="px-3 py-2 hover:bg-gray-100 cursor-pointer text-sm text-gray-800"
+                    onMouseDown={() => {
+                      setKeyPairName(kp);
+                      setShowDropdown(false);
+                    }}
+                  >
+                    {kp}
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
+
+          {/* Create / Download button */}
+          <KeyDownloadButton
+            awsAccessKey={awsAccessKey}
+            awsSecretKey={awsSecretKey}
+            region={targetRegion}
+            keyPairName={keyPairName}
+            disabled={keyPairsLoading || isSubmitting}
+          />
 
           {/* Username (Pre-filled) */}
           <div>
@@ -980,49 +1026,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
               </div>
             )}
 
-            {/* STANDBY INFRASTRUCTURE CARD (Before launch) */}
-            {setupState !== 'in_progress' && setupState !== 'completed' && !provisionedServers && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
-                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-lg">🖥️</span>
-                    <h3 className="text-base font-bold text-gray-900">Active Infrastructure</h3>
-                  </div>
-                  <span className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full font-medium">
-                    Standby
-                  </span>
-                </div>
-                <p className="text-xs text-gray-500 leading-relaxed">
-                  Your dedicated Splunk cluster servers and Elastic IPs will appear here once you verify AWS credentials and launch the environment.
-                </p>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                    <p className="text-[11px] text-gray-500 font-medium">Cluster Master</p>
-                    <p className="text-xs font-bold text-gray-800 mt-0.5">1 Node</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                    <p className="text-[11px] text-gray-500 font-medium">Search Heads</p>
-                    <p className="text-xs font-bold text-gray-800 mt-0.5">3 Nodes (SH1–3)</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                    <p className="text-[11px] text-gray-500 font-medium">Indexers</p>
-                    <p className="text-xs font-bold text-gray-800 mt-0.5">3 Nodes (IDX1–3)</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                    <p className="text-[11px] text-gray-500 font-medium">Management</p>
-                    <p className="text-xs font-bold text-gray-800 mt-0.5">Deployment Server</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                    <p className="text-[11px] text-gray-500 font-medium">Forwarders</p>
-                    <p className="text-xs font-bold text-gray-800 mt-0.5">1 Heavy Forwarder</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
-                    <p className="text-[11px] text-gray-500 font-medium">Elastic IPs</p>
-                    <p className="text-xs font-bold text-gray-800 mt-0.5">Dedicated Public IPs</p>
-                  </div>
-                </div>
-              </div>
-            )}
+
 
             {terminateMessage && (
               <div
