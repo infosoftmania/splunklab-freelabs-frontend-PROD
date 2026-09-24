@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import InputField from './InputField';
 import KeyDownloadButton from './KeyDownloadButton';
 import ClusterConfigurationForm from './ClusterConfigurationForm';
-import { readLabId, writeLabId, readAwsCredentials, removeAwsCredentials, writeAwsCredentials } from '../lib/lab-storage';
+import { readLabId, writeLabId, removeLabId, readAwsCredentials, removeAwsCredentials, writeAwsCredentials } from '../lib/lab-storage';
 import environments from '../data/environments.json';
 import awsRegions from '../data/awsRegions.json';
 
@@ -60,6 +60,10 @@ export default function AwsForm({ userEmail = '', userName = '' }: AwsFormProps)
 
   const [provisionedServers, setProvisionedServers] = useState<Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string }> | null>(null);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [isDestroyModalOpen, setIsDestroyModalOpen] = useState(false);
+  const [destroyConfirmChecked, setDestroyConfirmChecked] = useState(false);
+  const [terminateLoading, setTerminateLoading] = useState(false);
+  const [terminateMessage, setTerminateMessage] = useState('');
 
   const [formData, setFormData] = useState<AdminFormData>(() => ({
     aws_access_key: '',
@@ -487,18 +491,83 @@ const handleGroupChange = (
 
 
 
+  // -------------------------------------------------------------
+  // Terminate & Destroy Lab
+  // -------------------------------------------------------------
+  const openDestroyModal = () => {
+    setDestroyConfirmChecked(false);
+    setIsDestroyModalOpen(true);
+  };
+
+  const executeTerminateLab = async () => {
+    if (!destroyConfirmChecked) return;
+    setTerminateLoading(true);
+    setTerminateMessage('Destroying all servers, Elastic IPs, and security groups in AWS... please wait.');
+
+    try {
+      const targetLabId = activeLabId || (formData.user_email ? formData.user_email.split('@')[0] : '');
+      const res = await fetch('/api/submit-form', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'DESTROY',
+          user_name: formData.user_name.trim() || 'student',
+          user_email: formData.user_email,
+          region: formData.region || 'us-east-1',
+          key_pair_name: formData.key_pair_name.trim(),
+          aws_access_key: formData.aws_access_key.trim(),
+          aws_secret_key: formData.aws_secret_key.trim(),
+          lab_id: targetLabId,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok || data.success) {
+        stopAllIntervals();
+        setProvisionedServers(null);
+        setSetupState('idle');
+        setActiveLabId(null);
+        removeLabId();
+        setIsClusterConfigurationOpen(false);
+        setIsDestroyModalOpen(false);
+        setDestroyConfirmChecked(false);
+        setSuccessMessage('');
+        setTerminateMessage('✅ All lab servers, Elastic IPs, and security groups have been permanently destroyed and cleaned up.');
+      } else {
+        setTerminateMessage(`❌ Failed to terminate: ${data.message || 'Error'}`);
+      }
+    } catch (err: unknown) {
+      setTerminateMessage(
+        `❌ Error terminating lab: ${err instanceof Error ? err.message : 'Failed'}`
+      );
+    } finally {
+      setTerminateLoading(false);
+    }
+  };
+
   // -------------------------
   // UI
   // -------------------------
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setIsClusterConfigurationOpen(true)}
-        className="fixed right-4 top-4 z-40 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow hover:bg-blue-700"
-      >
-        Cluster Configuration
-      </button>
+      <div className="fixed right-4 top-4 z-40 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={openDestroyModal}
+          disabled={!formData.aws_access_key.trim() || !formData.aws_secret_key.trim() || terminateLoading}
+          className="rounded-lg bg-red-600 hover:bg-red-700 px-3 py-2 font-semibold text-white shadow text-xs flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          title="Permanently terminate all servers, Elastic IPs, and security groups in AWS"
+        >
+          <span>🗑️</span>
+          <span>Destroy Lab</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setIsClusterConfigurationOpen(true)}
+          className="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow hover:bg-blue-700 text-xs"
+        >
+          Cluster Configuration
+        </button>
+      </div>
     <form onSubmit={handleSubmit} className="space-y-6">
       
       {/* STEP 1: AWS Credentials */}
@@ -896,6 +965,41 @@ const handleGroupChange = (
               );
             })}
           </div>
+
+          {/* Terminate Button */}
+          <div className="mt-4 pt-3 border-t border-green-200 flex justify-end">
+            <button
+              type="button"
+              onClick={openDestroyModal}
+              disabled={terminateLoading}
+              className="text-xs text-red-600 hover:text-red-800 font-semibold px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition flex items-center gap-1.5"
+            >
+              <span>🗑️</span>
+              <span>Terminate / Destroy Lab</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {terminateMessage && (
+        <div
+          className={`p-4 rounded-xl text-xs font-semibold border ${
+            terminateMessage.startsWith('✅')
+              ? 'bg-green-50 border-green-200 text-green-800'
+              : 'bg-red-50 border-red-200 text-red-800'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <p>{terminateMessage}</p>
+            <button
+              type="button"
+              onClick={() => setTerminateMessage('')}
+              className="text-gray-400 hover:text-gray-600 font-bold ml-2 text-sm"
+              title="Dismiss"
+            >
+              ×
+            </button>
+          </div>
         </div>
       )}
 
@@ -906,7 +1010,120 @@ const handleGroupChange = (
           provisionedServers={provisionedServers}
           hideAuth={true}
           userEmail={formData.user_email}
+          onDestroyLab={openDestroyModal}
         />
+      )}
+
+      {/* Terminate & Destroy Confirmation Modal */}
+      {isDestroyModalOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget && !terminateLoading) {
+              setIsDestroyModalOpen(false);
+              setDestroyConfirmChecked(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl border border-red-200"
+          >
+            {/* Modal Header */}
+            <div className="flex items-start gap-3.5 border-b border-gray-100 pb-4">
+              <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center text-red-600 text-xl font-bold shrink-0">
+                ⚠️
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 leading-tight">
+                  Terminate &amp; Clean Up All Lab Resources
+                </h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  This action will permanently delete all cloud resources created in your AWS account.
+                </p>
+              </div>
+            </div>
+
+            {/* Resource Breakdown Card */}
+            <div className="mt-4 p-4 bg-red-50/70 border border-red-200 rounded-xl space-y-2.5 text-xs text-red-950">
+              <p className="font-bold text-red-900 uppercase tracking-wider text-[11px]">
+                Resources that will be permanently destroyed &amp; cleaned:
+              </p>
+              <ul className="space-y-2 pl-1">
+                <li className="flex items-center gap-2.5">
+                  <span className="text-base">💻</span>
+                  <span><strong>All 16 EC2 Instances:</strong> 9 Splunk Cluster nodes + 7 Data Source servers</span>
+                </li>
+                <li className="flex items-center gap-2.5">
+                  <span className="text-base">🌐</span>
+                  <span><strong>Elastic IPs:</strong> All allocated EIPs released back to AWS (prevents unwanted hourly charges)</span>
+                </li>
+                <li className="flex items-center gap-2.5">
+                  <span className="text-base">🛡️</span>
+                  <span><strong>Security Groups:</strong> All <code>freelabs-sg-*</code> firewall groups deleted</span>
+                </li>
+                <li className="flex items-center gap-2.5">
+                  <span className="text-base">⚙️</span>
+                  <span><strong>Cluster State:</strong> Configuration session and local storage cleared</span>
+                </li>
+              </ul>
+            </div>
+
+            {/* Confirmation Checkbox */}
+            <div className="mt-5 p-3.5 rounded-xl border border-gray-200 bg-gray-50">
+              <label className="flex items-start gap-3 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={destroyConfirmChecked}
+                  onChange={(e) => setDestroyConfirmChecked(e.target.checked)}
+                  disabled={terminateLoading}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                />
+                <span className="text-xs font-semibold text-gray-800 leading-snug">
+                  I understand that all 16 servers, Elastic IPs, and configurations will be permanently destroyed, and I want to proceed.
+                </span>
+              </label>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="mt-6 flex items-center justify-end gap-3 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsDestroyModalOpen(false);
+                  setDestroyConfirmChecked(false);
+                }}
+                disabled={terminateLoading}
+                className="px-4 py-2 text-xs font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg transition disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={executeTerminateLab}
+                disabled={!destroyConfirmChecked || terminateLoading}
+                className={`px-4 py-2 text-xs font-bold rounded-lg transition flex items-center gap-2 ${
+                  !destroyConfirmChecked || terminateLoading
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-red-600 hover:bg-red-700 text-white shadow-md active:scale-95'
+                }`}
+              >
+                {terminateLoading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    <span>Destroying Resources...</span>
+                  </>
+                ) : (
+                  <span>🗑️ Confirm &amp; Terminate Everything</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );
