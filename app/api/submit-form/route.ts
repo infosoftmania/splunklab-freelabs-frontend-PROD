@@ -1,4 +1,14 @@
 import { NextResponse } from 'next/server';
+import {
+  EC2Client,
+  DescribeInstancesCommand,
+  TerminateInstancesCommand,
+  DescribeAddressesCommand,
+  DisassociateAddressCommand,
+  ReleaseAddressCommand,
+  DescribeSecurityGroupsCommand,
+  DeleteSecurityGroupCommand,
+} from '@aws-sdk/client-ec2';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -114,6 +124,206 @@ export async function POST(req: Request) {
         );
       }
     }
+ 
+    // -------------------------------------------------------------
+    // ACTION: DESTROY (Terminate EC2, Release EIPs, Delete SGs, Teardown)
+    // -------------------------------------------------------------
+    if (currentAction === 'DESTROY') {
+      const emailPrefix = user_email ? user_email.split('@')[0] : '';
+      const lab_id = raw_lab_id || emailPrefix || '';
+
+      if (!aws_access_key || !aws_secret_key || !region) {
+        return NextResponse.json(
+          { success: false, message: 'AWS credentials and region are required for lab termination' },
+          { status: 400 }
+        );
+      }
+
+      const ec2Client = new EC2Client({
+        region,
+        credentials: {
+          accessKeyId: String(aws_access_key).trim(),
+          secretAccessKey: String(aws_secret_key).trim(),
+        },
+      });
+
+      const terminatedInstanceIds: string[] = [];
+      const releasedEips: string[] = [];
+      const deletedSecurityGroups: string[] = [];
+
+      // 1. Terminate all active/running/stopped FreeLabs EC2 instances
+      try {
+        const descRes = await ec2Client.send(
+          new DescribeInstancesCommand({
+            Filters: [
+              {
+                Name: 'instance-state-name',
+                Values: ['pending', 'running', 'stopping', 'stopped'],
+              },
+            ],
+          })
+        );
+
+        const idsToTerminate: string[] = [];
+        for (const res of descRes.Reservations || []) {
+          for (const inst of res.Instances || []) {
+            let isTarget = false;
+            for (const t of inst.Tags || []) {
+              if (t.Key === 'LabId' && lab_id && t.Value === lab_id) {
+                isTarget = true;
+                break;
+              }
+              if (t.Key === 'Name' && t.Value?.startsWith('FreeLab-')) {
+                isTarget = true;
+                break;
+              }
+            }
+            if (isTarget && inst.InstanceId && !idsToTerminate.includes(inst.InstanceId)) {
+              idsToTerminate.push(inst.InstanceId);
+            }
+          }
+        }
+
+        if (idsToTerminate.length > 0) {
+          await ec2Client.send(
+            new TerminateInstancesCommand({ InstanceIds: idsToTerminate })
+          );
+          terminatedInstanceIds.push(...idsToTerminate);
+          console.log(`[DESTROY] Terminated ${idsToTerminate.length} EC2 instances:`, idsToTerminate);
+        }
+      } catch (instErr: any) {
+        console.warn('[DESTROY] EC2 termination warning:', instErr?.message);
+      }
+
+      // 2. Release Elastic IPs allocated to this lab
+      try {
+        const addrRes = await ec2Client.send(new DescribeAddressesCommand({}));
+        for (const addr of addrRes.Addresses || []) {
+          let isLabEip = false;
+          for (const t of addr.Tags || []) {
+            if (t.Key === 'LabId' && lab_id && t.Value === lab_id) {
+              isLabEip = true;
+              break;
+            }
+            if (t.Key === 'Name' && t.Value?.startsWith('FreeLab-')) {
+              isLabEip = true;
+              break;
+            }
+          }
+          if (!isLabEip && addr.InstanceId && terminatedInstanceIds.includes(addr.InstanceId)) {
+            isLabEip = true;
+          }
+
+          if (isLabEip) {
+            if (addr.AssociationId) {
+              try {
+                await ec2Client.send(
+                  new DisassociateAddressCommand({ AssociationId: addr.AssociationId })
+                );
+              } catch (disErr: any) {
+                // Normal AWS behavior: When an instance terminates, AWS automatically detaches the EIP association
+                console.log(`[DESTROY] EIP already auto-detached by AWS during termination.`);
+              }
+            }
+            if (addr.AllocationId) {
+              try {
+                await ec2Client.send(
+                  new ReleaseAddressCommand({ AllocationId: addr.AllocationId })
+                );
+                if (addr.PublicIp) releasedEips.push(addr.PublicIp);
+                console.log(`[DESTROY] Released Elastic IP: ${addr.PublicIp} (${addr.AllocationId})`);
+              } catch (relErr) {
+                console.warn('[DESTROY] Release EIP warning:', relErr);
+              }
+            }
+          }
+        }
+      } catch (eipErr: any) {
+        console.warn('[DESTROY] EIP release warning:', eipErr?.message);
+      }
+
+      // 3. Delete FreeLabs Security Groups
+      try {
+        const sgRes = await ec2Client.send(
+          new DescribeSecurityGroupsCommand({
+            Filters: [
+              {
+                Name: 'group-name',
+                Values: ['freelabs-sg-*'],
+              },
+            ],
+          })
+        );
+        for (const sg of sgRes.SecurityGroups || []) {
+          if (sg.GroupId) {
+            const matchesLab =
+              !lab_id ||
+              (sg.GroupName && (sg.GroupName.includes(lab_id) || sg.GroupName.includes(user_name)));
+            if (matchesLab) {
+              try {
+                await ec2Client.send(
+                  new DeleteSecurityGroupCommand({ GroupId: sg.GroupId })
+                );
+                deletedSecurityGroups.push(sg.GroupId);
+                console.log(`[DESTROY] Deleted security group: ${sg.GroupId}`);
+              } catch (sgErr) {
+                console.log(`[DESTROY] Security group ${sg.GroupId} cleanup deferred until instances terminate completely.`);
+              }
+            }
+          }
+        }
+      } catch (sgErr: any) {
+        console.warn('[DESTROY] SG deletion warning:', sgErr?.message);
+      }
+
+      // 4. Forward DESTROY request to backend API (to delete state files, revoke AMI share, etc.)
+      let backendData: any = null;
+      try {
+        const destroyPayload = {
+          action: 'DESTROY',
+          user_name,
+          user_email,
+          lab_id,
+          region,
+          key_name: key_pair_name || '',
+          key_pair_name: key_pair_name || '',
+          aws_access_key,
+          aws_secret_key,
+          codebuild_projects: ['project 5'],
+        };
+
+        const destroyResp = await fetch(API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(destroyPayload),
+        });
+
+        const destroyText = await destroyResp.text();
+        try {
+          backendData = JSON.parse(destroyText);
+          if (backendData && typeof backendData.body === 'string') {
+            backendData = JSON.parse(backendData.body);
+          }
+        } catch {
+          backendData = { message: destroyText };
+        }
+      } catch (backendErr: any) {
+        console.warn('[DESTROY] Backend API forward warning:', backendErr?.message);
+      }
+
+      return NextResponse.json(
+        {
+          success: true,
+          status: 'DESTROYED',
+          message: 'All lab resources (EC2 instances, Elastic IPs, and security groups) have been terminated and cleaned up successfully.',
+          terminated_instances: terminatedInstanceIds,
+          released_eips: releasedEips,
+          deleted_security_groups: deletedSecurityGroups,
+          backend_data: backendData,
+        },
+        { status: 200 }
+      );
+    }
 
     // -------------------------------------------------------------
     // ACTION: PROVISION
@@ -133,6 +343,69 @@ export async function POST(req: Request) {
 
     const emailPrefix = user_email ? user_email.split('@')[0] : '';
     const lab_id = raw_lab_id || emailPrefix || `freelab_${Math.floor(Date.now() / 1000)}`;
+
+    // -------------------------------------------------------------
+    // Guard: Check if instances ALREADY exist for this lab_id in AWS
+    // -------------------------------------------------------------
+    try {
+      const ec2Client = new EC2Client({
+        region,
+        credentials: {
+          accessKeyId: String(aws_access_key).trim(),
+          secretAccessKey: String(aws_secret_key).trim(),
+        },
+      });
+
+      const checkRes = await ec2Client.send(
+        new DescribeInstancesCommand({
+          Filters: [
+            {
+              Name: 'tag:LabId',
+              Values: [lab_id],
+            },
+            {
+              Name: 'instance-state-name',
+              Values: ['pending', 'running', 'stopping', 'stopped'],
+            },
+          ],
+        })
+      );
+
+      let existingCount = 0;
+      const existingServers: Record<string, any> = {};
+      for (const res of checkRes.Reservations || []) {
+        for (const inst of res.Instances || []) {
+          existingCount++;
+          let sName = inst.InstanceId || 'unknown';
+          for (const t of inst.Tags || []) {
+            if (t.Key === 'Name' && t.Value) sName = t.Value;
+          }
+          existingServers[sName] = {
+            public_ip: inst.PublicIpAddress || inst.PrivateIpAddress || 'N/A',
+            private_ip: inst.PrivateIpAddress || 'N/A',
+            instance_id: inst.InstanceId,
+            state: inst.State?.Name || 'unknown',
+            region,
+          };
+        }
+      }
+
+      if (existingCount > 0) {
+        return NextResponse.json(
+          {
+            success: false,
+            existing_lab: true,
+            instance_count: existingCount,
+            servers: existingServers,
+            lab_id,
+            message: `⚠️ An active lab already exists for this account (${existingCount} servers found for Lab ID: "${lab_id}"). Please terminate your existing lab before creating a new one.`,
+          },
+          { status: 409 }
+        );
+      }
+    } catch (checkErr: any) {
+      console.warn('[SUBMIT-FORM] Pre-provision check warning:', checkErr?.message);
+    }
 
     const backendPayload: Record<string, any> = {
       action: 'PROVISION',

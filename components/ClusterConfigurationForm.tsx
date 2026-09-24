@@ -21,6 +21,7 @@ type Props = {
   provisionedServers?: Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string } > | null;
   userEmail?: string;
   hideAuth?: boolean;
+  onDestroyLab?: () => void;
 };
 
 type ProgressStep =
@@ -65,7 +66,13 @@ function loadGoogleIdentityScript(): Promise<void> {
   });
 }
 
-export default function ClusterConfigurationForm({ onClose, provisionedServers, userEmail: propUserEmail, hideAuth }: Props) {
+export default function ClusterConfigurationForm({
+  onClose,
+  provisionedServers,
+  userEmail: propUserEmail,
+  hideAuth,
+  onDestroyLab,
+}: Props) {
   const [publicIps, setPublicIps] = useState<Record<ServerName, string>>(() =>
     Object.fromEntries(SERVER_NAMES.map((name) => [name, ''])) as Record<ServerName, string>
   );
@@ -603,15 +610,29 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers, 
               Enter the Public IPs of your 9 existing servers to proceed with cluster setup.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={closeModal}
-            disabled={working}
-            aria-label="Close"
-            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            <span className="text-xl font-bold leading-none">&times;</span>
-          </button>
+          <div className="flex items-center gap-2">
+            {onDestroyLab && (
+              <button
+                type="button"
+                onClick={onDestroyLab}
+                disabled={working}
+                className="text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Terminate all servers and clean up AWS resources"
+              >
+                <span>🗑️</span>
+                <span>Destroy Lab</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={closeModal}
+              disabled={working}
+              aria-label="Close"
+              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <span className="text-xl font-bold leading-none">&times;</span>
+            </button>
+          </div>
         </div>
 
         {/* Authentication Status Bar */}
@@ -899,15 +920,30 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers, 
         )}
 
         {/* Action Button */}
-        <div className="mt-6 flex justify-end gap-3 border-t border-gray-100 pt-4">
-          <button
-            type="button"
-            onClick={closeModal}
-            disabled={working}
-            className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 transition"
-          >
-            {progressStep === 'completed' ? 'Close' : 'Cancel'}
-          </button>
+        <div className="mt-6 flex items-center justify-between gap-3 border-t border-gray-100 pt-4">
+          <div>
+            {onDestroyLab && (
+              <button
+                type="button"
+                onClick={onDestroyLab}
+                disabled={working}
+                className="text-xs font-semibold text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 px-3 py-2 rounded-lg transition flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Cleanly terminate all servers, Elastic IPs, and security groups in AWS"
+              >
+                <span>🗑️</span>
+                <span>Destroy / Reset Lab</span>
+              </button>
+            )}
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={closeModal}
+              disabled={working}
+              className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50 transition"
+            >
+              {progressStep === 'completed' ? 'Close' : 'Cancel'}
+            </button>
           <button
             type="button"
             onClick={proceed}
@@ -929,5 +965,6 @@ export default function ClusterConfigurationForm({ onClose, provisionedServers, 
         </div>
       </div>
     </div>
-  );
+  </div>
+);
 }
