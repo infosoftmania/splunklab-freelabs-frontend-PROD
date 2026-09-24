@@ -23,9 +23,24 @@ type AwsFormProps = {
   userName?: string;
 };
 
+type RegionQuotaSummary = {
+  region: string;
+  region_name?: string;
+  allocated_instances?: number;
+  allocated_eips?: number;
+  available_vcpus: number;
+  quota_vcpus: number;
+  used_vcpus: number;
+  available_eips: number;
+  quota_eips: number;
+  used_eips: number;
+};
+
 export default function AwsForm({ userEmail = '', userName = '' }: AwsFormProps) {
   const [selectedGroup, setSelectedGroup] = useState('project_5');
   const [awsValid, setAwsValid] = useState<boolean | null>(null);
+  const [regionsSummary, setRegionsSummary] = useState<RegionQuotaSummary[] | null>(null);
+  const [isMultiRegionMode, setIsMultiRegionMode] = useState<boolean>(false);
   const [keyPairValid, setKeyPairValid] = useState<boolean | null>(null);
   const [successMessage, setSuccessMessage] = useState('');
   const [isClusterConfigurationOpen, setIsClusterConfigurationOpen] = useState(false);
@@ -121,6 +136,8 @@ export default function AwsForm({ userEmail = '', userName = '' }: AwsFormProps)
             });
       setAwsValid(null);
       setKeyPairValid(null);
+      setRegionsSummary(null);
+      setIsMultiRegionMode(false);
     }
 
     if (name === 'key_pair_name') {
@@ -223,6 +240,8 @@ const handleGroupChange = (
     setAwsAccessMessage('');
     setAwsSecretMessage('');
     setKeyPairMessage('');
+    setRegionsSummary(null);
+    setIsMultiRegionMode(false);
 
     try {
       const res = await fetch('/api/validate-aws-cred', {
@@ -233,6 +252,8 @@ const handleGroupChange = (
           aws_secret_key: formData.aws_secret_key.trim(),
           region: formData.region || 'us-east-1',
           user_email: formData.user_email,
+          is_admin: true,
+          mode: 'admin',
         }),
       });
 
@@ -243,21 +264,17 @@ const handleGroupChange = (
         setAwsAccessMessage(errorMsg);
         setAwsSecretMessage(errorMsg);
         setAwsValid(false);
-      } else if (!data.has_required_vcpu) {
-        const errorMsg = data.message || 'Insufficient vCPU quota';
-        setAwsAccessMessage(errorMsg);
-        setAwsSecretMessage(errorMsg);
-        setAwsValid(false);
       } else {
         setAwsAccessMessage('AWS Access Key is valid');
         setAwsSecretMessage('AWS Secret Key is valid');
         setAwsValid(true);
-        if (data.region) {
-          setFormData((prev) => ({ ...prev, region: data.region }));
-          fetchKeyPairsForRegion(data.region);
-        } else if (formData.region) {
-          fetchKeyPairsForRegion(formData.region);
+        if (data.regions_summary && Array.isArray(data.regions_summary)) {
+          setRegionsSummary(data.regions_summary);
         }
+        setIsMultiRegionMode(Boolean(data.is_multi_region));
+        const effectiveRegion = data.region || formData.region || 'us-east-1';
+        setFormData((prev) => ({ ...prev, region: effectiveRegion }));
+        fetchKeyPairsForRegion(effectiveRegion);
       }
     } catch (err) {
       console.error(err);
@@ -628,6 +645,96 @@ const handleGroupChange = (
         )}
       </div>
 
+      {/* AWS Regional Quotas Breakdown Card */}
+      {awsValid && regionsSummary && regionsSummary.length > 0 && (
+        <div className="bg-white p-5 rounded-xl shadow-sm border border-gray-100 space-y-4">
+          <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+            <div>
+              <h3 className="text-sm font-bold text-gray-900 flex items-center gap-1.5">
+                <span>📊 AWS Quotas &amp; Server Allocation Plan</span>
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                {isMultiRegionMode
+                  ? '🌐 Multi-Region Allocation: All 16 servers require Elastic IPs. Allocation per region is strictly capped by available Elastic IPs.'
+                  : `✅ Single-Region Capable: All 16 servers will be created in ${formData.region || 'us-east-1'} (9 Elastic IPs attached to Splunk).`}
+              </p>
+            </div>
+            <span
+              className={`text-xs font-bold px-2.5 py-1 rounded-full border ${
+                isMultiRegionMode
+                  ? 'bg-purple-50 text-purple-700 border-purple-200'
+                  : 'bg-green-50 text-green-700 border-green-200'
+              }`}
+            >
+              {isMultiRegionMode ? '🌐 Multi-Region Mode (16 EIPs)' : '✅ Single Region (9 EIPs)'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5">
+            {regionsSummary.map((r) => {
+              const isSelected = r.region === formData.region;
+              const hasAllocated = (r.allocated_instances ?? 0) > 0;
+              return (
+                <div
+                  key={r.region}
+                  className={`p-2.5 rounded-lg border text-xs transition ${
+                    hasAllocated
+                      ? 'border-blue-400 bg-blue-50/50 shadow-xs ring-1 ring-blue-200'
+                      : isSelected
+                      ? 'border-purple-300 bg-purple-50/40 shadow-xs'
+                      : 'border-gray-200 bg-gray-50/70 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-bold text-gray-900 font-mono text-xs truncate" title={r.region}>
+                      {r.region}
+                    </span>
+                    {isSelected && (
+                      <span className="text-[9px] bg-blue-600 text-white px-1.5 py-0.2 rounded font-semibold shrink-0">
+                        Primary
+                      </span>
+                    )}
+                  </div>
+                  {r.region_name && (
+                    <p className="text-[10px] text-gray-500 font-medium truncate mb-1" title={r.region_name}>
+                      {r.region_name}
+                    </p>
+                  )}
+
+                  {/* Server Allocation Badge */}
+                  <div className="mb-2">
+                    {hasAllocated ? (
+                      <span className="block text-center text-[10px] font-bold bg-green-100 text-green-800 border border-green-200 rounded py-0.5 px-1">
+                        🖥️ {r.allocated_instances} servers ({r.allocated_eips} EIPs)
+                      </span>
+                    ) : (
+                      <span className="block text-center text-[10px] text-gray-400 bg-gray-100 rounded py-0.5 px-1">
+                        0 servers
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="space-y-0.5 text-[11px]">
+                    <div className="flex justify-between text-gray-600">
+                      <span>vCPUs:</span>
+                      <strong className="text-blue-700 font-mono">
+                        {r.available_vcpus} <span className="text-gray-400 font-normal">/ {r.quota_vcpus}</span>
+                      </strong>
+                    </div>
+                    <div className="flex justify-between text-gray-600">
+                      <span>EIPs:</span>
+                      <strong className="text-indigo-700 font-mono">
+                        {r.available_eips} <span className="text-gray-400 font-normal">/ {r.quota_eips}</span>
+                      </strong>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {/* STEP 2: Configuration & Launch (Only visible if AWS is valid) */}
       {awsValid && (
         <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
@@ -646,7 +753,13 @@ const handleGroupChange = (
               </button>
               <button
                 type="button"
-                onClick={() => { setAwsValid(null); setAwsAccessMessage(''); setAwsSecretMessage(''); }}
+                onClick={() => {
+                  setAwsValid(null);
+                  setAwsAccessMessage('');
+                  setAwsSecretMessage('');
+                  setRegionsSummary(null);
+                  setIsMultiRegionMode(false);
+                }}
                 className="text-xs text-blue-600 hover:text-blue-800 font-medium"
               >
                 Change AWS Keys
