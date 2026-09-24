@@ -577,7 +577,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
     <div className="min-h-screen bg-gray-50">
       {/* Top Header Bar */}
       <header className="sticky top-0 z-30 bg-white border-b border-gray-200 shadow-sm">
-        <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <span className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm">🎓</span>
             <div>
@@ -610,15 +610,18 @@ export default function StudentPortal({ user, onLogout }: Props) {
         <ClusterConfigurationForm
           onClose={() => setIsClusterConfigOpen(false)}
           provisionedServers={provisionedServers}
-          onDestroyLab={openDestroyModal}
         />
       )}
 
       {/* Page Content */}
-      <main className="max-w-lg mx-auto px-4 py-8 space-y-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-        {/* STEP 1: AWS Credentials */}
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
+          {/* LEFT COLUMN: Controls & Setup (5 cols on lg) */}
+          <div className="lg:col-span-5 space-y-6">
+
+            {/* STEP 1: AWS Credentials */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
           <h2 className="text-base font-bold text-gray-900 border-b border-gray-100 pb-2">
             Step 1: AWS Credentials
           </h2>
@@ -797,16 +800,6 @@ export default function StudentPortal({ user, onLogout }: Props) {
                 </button>
                 <button
                   type="button"
-                  onClick={openDestroyModal}
-                  disabled={terminateLoading || isLoadingDashboard || !hasAwsCredentials}
-                  className="text-xs font-semibold px-2.5 py-1 text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg transition disabled:opacity-50 flex items-center gap-1"
-                  title="Cleanly terminate all servers, Elastic IPs, and security groups in AWS"
-                >
-                  <span>🗑️</span>
-                  <span>Destroy Lab</span>
-                </button>
-                <button
-                  type="button"
                   onClick={resetAwsVerificationState}
                   className="text-xs text-blue-600 hover:text-blue-800 font-medium"
                 >
@@ -905,90 +898,156 @@ export default function StudentPortal({ user, onLogout }: Props) {
       </div>
     )}
 
-      {/* PROVISIONING PROGRESS & STATUS */}
-      {setupState === 'in_progress' && (
-        <div className="bg-white rounded-xl shadow-sm border border-blue-200 overflow-hidden">
-          <div className="p-6 bg-blue-50 text-center">
-            <p className="text-sm font-semibold text-blue-900 animate-pulse">{liveStatusText}</p>
-            <p className="text-xs text-blue-600 mt-1">Time elapsed: {elapsedSeconds}s</p>
           </div>
-        </div>
-      )}
 
-      {/* ERROR DURING PROVISIONING */}
-      {setupState === 'error' && errorMessage && (
-        <div className="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
-          <div className="p-6 bg-red-50 text-center">
-            <p className="text-xs font-semibold text-red-700">{errorMessage}</p>
-          </div>
-        </div>
-      )}
+          {/* RIGHT COLUMN: Active Servers & Infrastructure (7 cols on lg) */}
+          <div className="lg:col-span-7 space-y-6">
 
-      {/* COMPLETED SERVERS DISPLAY */}
-      {setupState === 'completed' && provisionedServers && (
-        <div className="bg-white rounded-xl shadow-sm border border-green-200 overflow-hidden">
-          <div className="px-6 py-4 border-b border-green-100 bg-green-50/60 flex items-center justify-between">
-            <span className="text-sm font-bold text-green-700">
-              ✅ All 16 Servers Created in us-east-1!
-            </span>
-            <button
-              type="button"
-              onClick={() => setIsClusterConfigOpen(true)}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow transition"
-            >
-              Cluster Configuration →
-            </button>
-          </div>
-          <div className="p-6">
-            <div className="max-h-64 overflow-y-auto space-y-1 bg-gray-50 p-3 rounded-lg border text-xs">
-              {Object.entries(provisionedServers).map(([sName, sData]) => (
-                <div key={sName} className="flex justify-between items-center py-1.5 border-b last:border-0">
-                  <span className="font-semibold text-gray-800">{sName}</span>
-                  <span className="text-right text-gray-600 font-mono">
-                    <span className="block">Public: {sData.public_ip || 'N/A'}</span>
-                    <span className="block text-[11px] text-gray-500">Private: {sData.private_ip || 'N/A'}</span>
+            {/* PROVISIONING PROGRESS & STATUS */}
+            {setupState === 'in_progress' && (
+              <div className="bg-white rounded-xl shadow-sm border border-blue-200 overflow-hidden">
+                <div className="p-6 bg-blue-50 text-center">
+                  <p className="text-sm font-semibold text-blue-900 animate-pulse">{liveStatusText}</p>
+                  <p className="text-xs text-blue-600 mt-1">Time elapsed: {elapsedSeconds}s</p>
+                </div>
+              </div>
+            )}
+
+            {/* ERROR DURING PROVISIONING */}
+            {setupState === 'error' && errorMessage && (
+              <div className="bg-white rounded-xl shadow-sm border border-red-200 overflow-hidden">
+                <div className="p-6 bg-red-50 text-center">
+                  <p className="text-xs font-semibold text-red-700">{errorMessage}</p>
+                </div>
+              </div>
+            )}
+
+            {/* COMPLETED SERVERS DISPLAY */}
+            {setupState === 'completed' && provisionedServers && (
+              <div className="bg-white rounded-xl shadow-sm border border-green-200 overflow-hidden">
+                <div className="px-6 py-4 border-b border-green-100 bg-green-50/60 flex items-center justify-between">
+                  <span className="text-sm font-bold text-green-700">
+                    ✅ All 16 Servers Created in us-east-1!
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsClusterConfigOpen(true)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-lg shadow transition"
+                  >
+                    Cluster Configuration →
+                  </button>
+                </div>
+                <div className="p-6">
+                  <div className="max-h-96 overflow-y-auto space-y-2 bg-gray-50 p-3.5 rounded-lg border text-xs">
+                    {Object.entries(provisionedServers).map(([sName, sData]) => (
+                      <div key={sName} className="flex justify-between items-center py-2 px-3 bg-white rounded-lg border border-gray-200 shadow-2xs hover:border-blue-300 transition-colors">
+                        <span className="font-semibold text-gray-800">{sName}</span>
+                        <div className="flex items-center gap-3">
+                          <span className="text-right text-gray-600 font-mono">
+                            <span className="block text-blue-700 font-medium">Public: {sData.public_ip || 'N/A'}</span>
+                            <span className="block text-[11px] text-gray-500">Private: {sData.private_ip || 'N/A'}</span>
+                          </span>
+                          {sData.public_ip && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard.writeText(sData.public_ip || '');
+                              }}
+                              className="text-[11px] px-2 py-1 rounded border bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 font-medium transition"
+                              title="Copy Public IP"
+                            >
+                              Copy
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Terminate Button */}
+                  <div className="mt-4 pt-3 border-t border-green-200 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={openDestroyModal}
+                      disabled={terminateLoading}
+                      className="text-xs text-red-600 hover:text-red-800 font-semibold px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition flex items-center gap-1.5"
+                    >
+                      <span>🗑️</span>
+                      <span>Terminate / Destroy Lab</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* STANDBY INFRASTRUCTURE CARD (Before launch) */}
+            {setupState !== 'in_progress' && setupState !== 'completed' && !provisionedServers && (
+              <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-6 space-y-4">
+                <div className="flex items-center justify-between border-b border-gray-100 pb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-lg">🖥️</span>
+                    <h3 className="text-base font-bold text-gray-900">Active Infrastructure</h3>
+                  </div>
+                  <span className="text-xs bg-gray-100 text-gray-600 px-2.5 py-1 rounded-full font-medium">
+                    Standby
                   </span>
                 </div>
-              ))}
-            </div>
+                <p className="text-xs text-gray-500 leading-relaxed">
+                  Your dedicated Splunk cluster servers and Elastic IPs will appear here once you verify AWS credentials and launch the environment.
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 pt-2">
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p className="text-[11px] text-gray-500 font-medium">Cluster Master</p>
+                    <p className="text-xs font-bold text-gray-800 mt-0.5">1 Node</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p className="text-[11px] text-gray-500 font-medium">Search Heads</p>
+                    <p className="text-xs font-bold text-gray-800 mt-0.5">3 Nodes (SH1–3)</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p className="text-[11px] text-gray-500 font-medium">Indexers</p>
+                    <p className="text-xs font-bold text-gray-800 mt-0.5">3 Nodes (IDX1–3)</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p className="text-[11px] text-gray-500 font-medium">Management</p>
+                    <p className="text-xs font-bold text-gray-800 mt-0.5">Deployment Server</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p className="text-[11px] text-gray-500 font-medium">Forwarders</p>
+                    <p className="text-xs font-bold text-gray-800 mt-0.5">1 Heavy Forwarder</p>
+                  </div>
+                  <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+                    <p className="text-[11px] text-gray-500 font-medium">Elastic IPs</p>
+                    <p className="text-xs font-bold text-gray-800 mt-0.5">Dedicated Public IPs</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
-            {/* Terminate Button */}
-            <div className="mt-4 pt-3 border-t flex justify-end">
-              <button
-                type="button"
-                onClick={openDestroyModal}
-                disabled={terminateLoading}
-                className="text-xs text-red-600 hover:text-red-800 font-semibold px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition flex items-center gap-1.5"
+            {terminateMessage && (
+              <div
+                className={`p-4 rounded-xl text-xs font-semibold border ${
+                  terminateMessage.startsWith('✅')
+                    ? 'bg-green-50 border-green-200 text-green-800'
+                    : 'bg-red-50 border-red-200 text-red-800'
+                }`}
               >
-                <span>🗑️</span>
-                <span>Terminate / Destroy Lab</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+                <div className="flex items-center justify-between">
+                  <p>{terminateMessage}</p>
+                  <button
+                    type="button"
+                    onClick={() => setTerminateMessage('')}
+                    className="text-gray-400 hover:text-gray-600 font-bold ml-2 text-sm"
+                    title="Dismiss"
+                  >
+                    ×
+                  </button>
+                </div>
+              </div>
+            )}
 
-      {terminateMessage && (
-        <div
-          className={`p-4 rounded-xl text-xs font-semibold border ${
-            terminateMessage.startsWith('✅')
-              ? 'bg-green-50 border-green-200 text-green-800'
-              : 'bg-red-50 border-red-200 text-red-800'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <p>{terminateMessage}</p>
-            <button
-              type="button"
-              onClick={() => setTerminateMessage('')}
-              className="text-gray-400 hover:text-gray-600 font-bold ml-2 text-sm"
-              title="Dismiss"
-            >
-              ×
-            </button>
           </div>
         </div>
-      )}
 
       {/* Terminate & Destroy Confirmation Modal */}
       {isDestroyModalOpen && (

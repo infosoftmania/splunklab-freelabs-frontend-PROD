@@ -104,8 +104,8 @@ export default function HomePage() {
   // 2. Authenticated as Admin (or Admin Mode Preview)
   if (user.isAdmin && viewMode === 'admin') {
     return (
-      <div className="min-h-screen bg-gray-50 py-8 px-4">
-        <div className="max-w-xl mx-auto mb-4 bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
+      <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
+        <div className="max-w-7xl mx-auto mb-6 bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <span className="text-sm font-bold text-purple-900">👑 Admin Portal</span>
             <span className="text-xs text-purple-700">({user.email})</span>
@@ -134,8 +134,8 @@ export default function HomePage() {
           </div>
         </div>
 
-        <div style={{ maxWidth: 600, margin: '0 auto' }}>
-          <AwsForm />
+        <div className="max-w-7xl mx-auto">
+          <AwsForm userEmail={user.email} userName={user.name} />
         </div>
       </div>
     );
