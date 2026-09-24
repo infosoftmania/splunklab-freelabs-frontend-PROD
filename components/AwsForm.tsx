@@ -549,17 +549,7 @@ const handleGroupChange = (
   // -------------------------
   return (
     <>
-      <div className="fixed right-4 top-4 z-40 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={openDestroyModal}
-          disabled={!formData.aws_access_key.trim() || !formData.aws_secret_key.trim() || terminateLoading}
-          className="rounded-lg bg-red-600 hover:bg-red-700 px-3 py-2 font-semibold text-white shadow text-xs flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition"
-          title="Permanently terminate all servers, Elastic IPs, and security groups in AWS"
-        >
-          <span>🗑️</span>
-          <span>Destroy Lab</span>
-        </button>
+      <div className="fixed right-4 top-4 z-40">
         <button
           type="button"
           onClick={() => setIsClusterConfigurationOpen(true)}
@@ -568,10 +558,14 @@ const handleGroupChange = (
           Cluster Configuration
         </button>
       </div>
-    <form onSubmit={handleSubmit} className="space-y-6">
-      
-      {/* STEP 1: AWS Credentials */}
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
+    <form onSubmit={handleSubmit}>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+
+        {/* LEFT COLUMN: Configuration & Credentials (5 cols on lg) */}
+        <div className="lg:col-span-5 space-y-6">
+
+          {/* STEP 1: AWS Credentials */}
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 space-y-5">
         <h2 className="text-base font-bold text-gray-900 border-b border-gray-100 pb-2">
           Step 1: AWS Credentials
         </h2>
@@ -679,7 +673,7 @@ const handleGroupChange = (
 {/* PEM Key section — show ONLY after region is selected */}
 {formData.region && (
   <>
-    <div className="relative w-[400px]">
+    <div className="relative w-full">
       <label className="block text-sm font-medium text-gray-700 mb-1">
         PEM Key Name
       </label>
@@ -832,177 +826,206 @@ const handleGroupChange = (
     </div>
   )}
 
-  {/* Progress Banner: Environment setup, please wait... */}
-      {setupState === 'in_progress' && (
-        <div className="mt-4 p-4 border border-blue-300 rounded-lg bg-blue-50 shadow-sm max-w-[420px]">
-          <div className="flex items-center gap-3">
-            <div className="w-5 h-5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
-            <div>
-              <h4 className="text-sm font-bold text-blue-900">
-                Environment setup, please wait...
-              </h4>
-              <p className="text-xs text-blue-700 mt-0.5">
-                Creating 16 servers on AWS ({formData.region || 'us-east-1'}). Time elapsed: <strong>{elapsedSeconds}s</strong>
-              </p>
-            </div>
-          </div>
-
-          <div className="w-full bg-blue-200 rounded-full h-2 mt-3 overflow-hidden">
-            <div
-              className="bg-blue-600 h-2 rounded-full transition-all duration-500 ease-out"
-              style={{ width: `${Math.min(95, Math.max(8, (elapsedSeconds / 45) * 100))}%` }}
-            />
-          </div>
-
-          <div className="flex items-center justify-between text-[11px] text-blue-800 mt-2 font-medium">
-            <span>{liveStatusText || 'Creating EC2 instances...'}</span>
-            <span>~45s total</span>
-          </div>
         </div>
-      )}
+        {/* End Left Column */}
 
-      {/* Error / Simple Info Message */}
-      {successMessage && setupState !== 'in_progress' && (
-        <p
-          className={`text-center mt-2 font-medium text-sm ${
-            successMessage.startsWith('✅') ? 'text-green-600' : 'text-red-600'
-          }`}
-        >
-          {successMessage}
-        </p>
-      )}
+        {/* RIGHT COLUMN: Infrastructure & Status (7 cols on lg) */}
+        <div className="lg:col-span-7 space-y-6">
 
-      {/* Completed Banner: Environment setup done! */}
-      {setupState === 'completed' && provisionedServers && (
-        <div className="mt-4 p-4 border-2 border-green-400 rounded-lg bg-green-50 shadow-md max-w-[420px]">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <span className="text-xl">✅</span>
-              <div>
-                <h3 className="text-sm font-bold text-green-900">
-                  Environment setup done!
-                </h3>
-                <p className="text-xs text-green-700">
-                  All {Object.keys(provisionedServers).length} servers are running and ready.
-                </p>
+          {/* Standby State (When idle / not provisioning and no servers yet) */}
+          {setupState !== 'in_progress' && setupState !== 'completed' && (
+            <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-100 flex flex-col items-center justify-center text-center min-h-[360px]">
+              <div className="w-16 h-16 rounded-full bg-blue-50 border border-blue-100 flex items-center justify-center text-2xl text-blue-600 mb-4">
+                🖥️
+              </div>
+              <h3 className="text-base font-bold text-gray-900">Infrastructure Dashboard</h3>
+              <p className="text-xs text-gray-500 mt-1 max-w-sm">
+                Validate your AWS credentials and select your configuration on the left to provision your 16 multi-region lab servers.
+              </p>
+              <div className="mt-6 flex flex-wrap gap-2 justify-center text-[11px] text-gray-400 font-mono">
+                <span className="bg-gray-50 px-2 py-1 rounded border border-gray-100">16 Dedicated Instances</span>
+                <span className="bg-gray-50 px-2 py-1 rounded border border-gray-100">Elastic Public IPs</span>
+                <span className="bg-gray-50 px-2 py-1 rounded border border-gray-100">Multi-Region Balancing</span>
               </div>
             </div>
-            <span className="text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded-full font-bold">
-              Active
-            </span>
-          </div>
+          )}
 
-          {/* Cluster Configuration Callout */}
-          <div className="bg-white p-3 rounded-md border border-green-200 mb-3 shadow-sm">
-            <p className="text-xs text-gray-700 mb-2 font-medium">
-              👉 <strong>Next Step:</strong> Copy the server <strong>Public IPs</strong> below, then click below to log in with your Gmail and configure your Splunk cluster:
-            </p>
-            <button
-              type="button"
-              onClick={() => setIsClusterConfigurationOpen(true)}
-              className="w-full py-2.5 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow flex items-center justify-center gap-2 transition-all hover:shadow-md active:scale-95"
-            >
-              <span>🚀 Open Cluster Configuration</span>
-            </button>
-          </div>
+          {/* Progress Banner: Environment setup, please wait... */}
+          {setupState === 'in_progress' && (
+            <div className="p-6 border border-blue-200 rounded-xl bg-white shadow-sm w-full">
+              <div className="flex items-center gap-3">
+                <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                <div>
+                  <h4 className="text-sm font-bold text-blue-900">
+                    Environment setup, please wait...
+                  </h4>
+                  <p className="text-xs text-blue-700 mt-0.5">
+                    Creating 16 servers on AWS ({formData.region || 'us-east-1'}). Time elapsed: <strong>{elapsedSeconds}s</strong>
+                  </p>
+                </div>
+              </div>
 
-          {/* Multi-Region Explanation Note */}
-          <div className="text-[11px] text-gray-600 bg-gray-50 p-2 rounded border border-gray-200 mb-2">
-            💡 <em>Servers are distributed across AWS regions (e.g. <code>us-west-1</code>, <code>us-west-2</code>, <code>ap-south-1</code>) to balance vCPU limits, each with a dedicated Public Elastic IP. Select the corresponding region in your AWS Console to view them.</em>
-          </div>
-
-          {/* Server List */}
-          <div className="max-h-60 overflow-y-auto space-y-1.5 pr-1">
-            {Object.entries(provisionedServers).map(([srvName, srvInfo]) => {
-              const pubIp =
-                typeof srvInfo === 'object' && srvInfo
-                  ? srvInfo.public_ip || srvInfo.private_ip || ''
-                  : String(srvInfo || '');
-              const srvRegion = typeof srvInfo === 'object' && srvInfo ? srvInfo.region : undefined;
-              return (
+              <div className="w-full bg-blue-100 rounded-full h-2.5 mt-4 overflow-hidden">
                 <div
-                  key={srvName}
-                  className="flex items-center justify-between bg-white p-2 rounded border border-gray-200 text-xs shadow-sm hover:border-blue-300 transition-colors"
-                >
-                  <div className="flex items-center gap-1.5 truncate max-w-[190px]">
-                    <span className="font-semibold text-gray-800 truncate" title={srvName}>
-                      {srvName}
-                    </span>
-                    {srvRegion && (
-                      <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 font-mono flex-shrink-0" title={`AWS Region: ${srvRegion}`}>
-                        {srvRegion}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <div className="text-right">
-                      <code className="block text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded font-mono text-[11px] font-medium">
-                        Public: {pubIp || 'N/A'}
-                      </code>
-                      <code className="block text-gray-600 bg-gray-50 px-1.5 py-0.5 rounded font-mono text-[11px]">
-                        Private: {typeof srvInfo === 'object' && srvInfo ? srvInfo.private_ip || 'N/A' : 'N/A'}
-                      </code>
-                    </div>
-                    {pubIp && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard.writeText(pubIp);
-                          setCopiedKey(srvName);
-                          setTimeout(() => setCopiedKey(null), 2000);
-                        }}
-                        className={`text-[11px] px-2 py-0.5 rounded border transition-colors ${
-                          copiedKey === srvName
-                            ? 'bg-green-100 text-green-800 border-green-300 font-bold'
-                            : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
-                        }`}
-                      >
-                        {copiedKey === srvName ? '✓ Copied' : 'Copy'}
-                      </button>
-                    )}
+                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out"
+                  style={{ width: `${Math.min(95, Math.max(8, (elapsedSeconds / 45) * 100))}%` }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-blue-800 mt-3 font-medium">
+                <span>{liveStatusText || 'Creating EC2 instances...'}</span>
+                <span>~45s total</span>
+              </div>
+            </div>
+          )}
+
+          {/* Error / Simple Info Message */}
+          {successMessage && setupState !== 'in_progress' && (
+            <p
+              className={`text-center font-medium text-sm ${
+                successMessage.startsWith('✅') ? 'text-green-600' : 'text-red-600'
+              }`}
+            >
+              {successMessage}
+            </p>
+          )}
+
+          {/* Completed Banner: Environment setup done! */}
+          {setupState === 'completed' && provisionedServers && (
+            <div className="p-6 border border-green-300 rounded-xl bg-green-50/50 shadow-sm w-full">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">✅</span>
+                  <div>
+                    <h3 className="text-sm font-bold text-green-900">
+                      Environment setup done!
+                    </h3>
+                    <p className="text-xs text-green-700">
+                      All {Object.keys(provisionedServers).length} servers are running and ready.
+                    </p>
                   </div>
                 </div>
-              );
-            })}
-          </div>
+                <span className="text-xs bg-green-100 text-green-800 px-2.5 py-1 rounded-full font-bold border border-green-200">
+                  Active
+                </span>
+              </div>
 
-          {/* Terminate Button */}
-          <div className="mt-4 pt-3 border-t border-green-200 flex justify-end">
-            <button
-              type="button"
-              onClick={openDestroyModal}
-              disabled={terminateLoading}
-              className="text-xs text-red-600 hover:text-red-800 font-semibold px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition flex items-center gap-1.5"
+              {/* Cluster Configuration Callout */}
+              <div className="bg-white p-4 rounded-lg border border-green-200 mb-4 shadow-xs">
+                <p className="text-xs text-gray-700 mb-2.5 font-medium">
+                  👉 <strong>Next Step:</strong> Copy the server <strong>Public IPs</strong> below, then click below to configure your Splunk cluster:
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsClusterConfigurationOpen(true)}
+                  className="w-full py-2.5 px-4 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow flex items-center justify-center gap-2 transition-all hover:shadow-md active:scale-95"
+                >
+                  <span>🚀 Open Cluster Configuration</span>
+                </button>
+              </div>
+
+              {/* Multi-Region Explanation Note */}
+              <div className="text-[11px] text-gray-600 bg-white p-3 rounded-lg border border-gray-200 mb-4">
+                💡 <em>Servers are distributed across AWS regions (e.g. <code>us-west-1</code>, <code>us-west-2</code>, <code>ap-south-1</code>) to balance vCPU limits, each with a dedicated Public Elastic IP. Select the corresponding region in your AWS Console to view them.</em>
+              </div>
+
+              {/* Server List */}
+              <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
+                {Object.entries(provisionedServers).map(([srvName, srvInfo]) => {
+                  const pubIp =
+                    typeof srvInfo === 'object' && srvInfo
+                      ? srvInfo.public_ip || srvInfo.private_ip || ''
+                      : String(srvInfo || '');
+                  const srvRegion = typeof srvInfo === 'object' && srvInfo ? srvInfo.region : undefined;
+                  return (
+                    <div
+                      key={srvName}
+                      className="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 text-xs shadow-xs hover:border-blue-300 transition-colors"
+                    >
+                      <div className="flex items-center gap-2 truncate max-w-[220px]">
+                        <span className="font-semibold text-gray-800 truncate" title={srvName}>
+                          {srvName}
+                        </span>
+                        {srvRegion && (
+                          <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 font-mono flex-shrink-0" title={`AWS Region: ${srvRegion}`}>
+                            {srvRegion}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-right">
+                          <code className="block text-blue-700 bg-blue-50 px-2 py-0.5 rounded font-mono text-[11px] font-medium">
+                            Public: {pubIp || 'N/A'}
+                          </code>
+                          <code className="block text-gray-600 bg-gray-50 px-2 py-0.5 rounded font-mono text-[11px]">
+                            Private: {typeof srvInfo === 'object' && srvInfo ? srvInfo.private_ip || 'N/A' : 'N/A'}
+                          </code>
+                        </div>
+                        {pubIp && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              navigator.clipboard.writeText(pubIp);
+                              setCopiedKey(srvName);
+                              setTimeout(() => setCopiedKey(null), 2000);
+                            }}
+                            className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${
+                              copiedKey === srvName
+                                ? 'bg-green-100 text-green-800 border-green-300 font-bold'
+                                : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
+                            }`}
+                          >
+                            {copiedKey === srvName ? '✓ Copied' : 'Copy'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Terminate Button - ONLY under public and private IPs */}
+              <div className="mt-4 pt-3 border-t border-green-200 flex justify-end">
+                <button
+                  type="button"
+                  onClick={openDestroyModal}
+                  disabled={terminateLoading}
+                  className="text-xs text-red-600 hover:text-red-800 font-semibold px-4 py-2 border border-red-200 rounded-lg hover:bg-red-50 transition flex items-center gap-1.5"
+                >
+                  <span>🗑️</span>
+                  <span>Terminate / Destroy Lab</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {terminateMessage && (
+            <div
+              className={`p-4 rounded-xl text-xs font-semibold border ${
+                terminateMessage.startsWith('✅')
+                  ? 'bg-green-50 border-green-200 text-green-800'
+                  : 'bg-red-50 border-red-200 text-red-800'
+              }`}
             >
-              <span>🗑️</span>
-              <span>Terminate / Destroy Lab</span>
-            </button>
-          </div>
-        </div>
-      )}
+              <div className="flex items-center justify-between">
+                <p>{terminateMessage}</p>
+                <button
+                  type="button"
+                  onClick={() => setTerminateMessage('')}
+                  className="text-gray-400 hover:text-gray-600 font-bold ml-2 text-sm"
+                  title="Dismiss"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          )}
 
-      {terminateMessage && (
-        <div
-          className={`p-4 rounded-xl text-xs font-semibold border ${
-            terminateMessage.startsWith('✅')
-              ? 'bg-green-50 border-green-200 text-green-800'
-              : 'bg-red-50 border-red-200 text-red-800'
-          }`}
-        >
-          <div className="flex items-center justify-between">
-            <p>{terminateMessage}</p>
-            <button
-              type="button"
-              onClick={() => setTerminateMessage('')}
-              className="text-gray-400 hover:text-gray-600 font-bold ml-2 text-sm"
-              title="Dismiss"
-            >
-              ×
-            </button>
-          </div>
         </div>
-      )}
+        {/* End Right Column */}
 
+      </div>
+      {/* End Grid */}
     </form>
       {isClusterConfigurationOpen && (
         <ClusterConfigurationForm
@@ -1010,7 +1033,6 @@ const handleGroupChange = (
           provisionedServers={provisionedServers}
           hideAuth={true}
           userEmail={formData.user_email}
-          onDestroyLab={openDestroyModal}
         />
       )}
 
