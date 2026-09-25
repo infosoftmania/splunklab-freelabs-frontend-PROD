@@ -57,6 +57,67 @@ export default function AwsForm({ userEmail = '', userName = '', token = '' }: A
 
   const [keyPairsList, setKeyPairsList] = useState<string[]>([]);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
+  const keyPairDropdownRef = useRef<HTMLDivElement | null>(null);
+
+  const filteredKeyPairs = keyPairsList.filter((kp) =>
+    kp.toLowerCase().includes(formData.key_pair_name.toLowerCase().trim())
+  );
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (keyPairDropdownRef.current && !keyPairDropdownRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+        setHighlightedIndex(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleKeyPairKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (keyPairsLoading) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (!showDropdown) {
+        setShowDropdown(true);
+        setHighlightedIndex(0);
+      } else if (filteredKeyPairs.length > 0) {
+        setHighlightedIndex((prev) =>
+          prev === null || prev >= filteredKeyPairs.length - 1 ? 0 : prev + 1
+        );
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (showDropdown && filteredKeyPairs.length > 0) {
+        setHighlightedIndex((prev) =>
+          prev === null || prev <= 0 ? filteredKeyPairs.length - 1 : prev - 1
+        );
+      }
+    } else if (e.key === 'Enter') {
+      if (
+        showDropdown &&
+        highlightedIndex !== null &&
+        highlightedIndex >= 0 &&
+        highlightedIndex < filteredKeyPairs.length
+      ) {
+        e.preventDefault();
+        setFormData((prev) => ({
+          ...prev,
+          key_pair_name: filteredKeyPairs[highlightedIndex],
+        }));
+        setShowDropdown(false);
+        setHighlightedIndex(null);
+      }
+    } else if (e.key === 'Escape') {
+      if (showDropdown) {
+        e.preventDefault();
+        setShowDropdown(false);
+        setHighlightedIndex(null);
+      }
+    }
+  };
 
   const [vpcMessage, setVpcMessage] = useState('');
   const [vpcChecking, setVpcChecking] = useState(false);
@@ -247,16 +308,7 @@ const handleGroupChange = (
     setIsMultiRegionMode(false);
 
     try {
-      let activeToken = token || '';
-      if (!activeToken) {
-        try {
-          const profRes = await fetch('/api/auth/profile');
-          const profData = await profRes.json();
-          if (profData?.token) {
-            activeToken = profData.token;
-          }
-        } catch {}
-      }
+      const activeToken = token || '';
 
       const res = await fetch('/api/validate-aws-cred', {
         method: 'POST',
@@ -825,7 +877,7 @@ const handleGroupChange = (
 {/* PEM Key section — show ONLY after region is selected */}
 {formData.region && (
   <>
-    <div className="relative w-full">
+    <div ref={keyPairDropdownRef} className="relative w-full">
       <label className="block text-sm font-medium text-gray-700 mb-1">
         PEM Key Name
       </label>
@@ -836,16 +888,19 @@ const handleGroupChange = (
         value={
           keyPairsLoading ? 'Loading key pairs…' : formData.key_pair_name
         }
-        onChange={handleChange}
+        onChange={(e) => {
+          handleChange(e);
+          setShowDropdown(true);
+          setHighlightedIndex(null);
+        }}
+        onKeyDown={handleKeyPairKeyDown}
         placeholder="Select or enter PEM key name"
         disabled={keyPairsLoading}
-        className={`mt-1 block w-full h-[48px] rounded-md shadow-sm px-3 pr-10 text-sm
-          ${
-            keyPairsLoading
-              ? 'bg-gray-100 cursor-not-allowed border-gray-300'
-              : 'border border-gray-300'
-          }
-        `}
+        className={`mt-1 block w-full h-[48px] rounded-md shadow-sm px-3 pr-10 text-sm border text-gray-900 ${
+          keyPairsLoading
+            ? 'bg-gray-100 cursor-not-allowed border-gray-300'
+            : 'border-gray-300 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500'
+        }`}
         onFocus={() => !keyPairsLoading && setShowDropdown(true)}
         autoComplete="off"
         required
@@ -862,7 +917,7 @@ const handleGroupChange = (
       {!keyPairsLoading && keyPairsList.length > 0 && (
         <button
           type="button"
-          className="absolute right-2 top-12 -translate-y-1/2 text-gray-500 hover:text-gray-700"
+          className="absolute right-2 top-12 -translate-y-1/2 text-gray-500 hover:text-gray-700 p-1"
           onClick={() => setShowDropdown(prev => !prev)}
         >
           ▼
@@ -870,23 +925,34 @@ const handleGroupChange = (
       )}
 
       {/* Dropdown list */}
-      {!keyPairsLoading && showDropdown && keyPairsList.length > 0 && (
-        <ul className="absolute z-10 mt-1 w-full max-h-48 overflow-auto rounded-md border border-gray-300 bg-white shadow-lg">
-          {keyPairsList.map((kp) => (
-            <li
-              key={kp}
-              className="px-3 py-2 hover:bg-gray-100 cursor-pointer"
-              onMouseDown={() => {
-                setFormData(prev => ({
-                  ...prev,
-                  key_pair_name: kp,
-                }));
-                setShowDropdown(false);
-              }}
-            >
-              {kp}
+      {!keyPairsLoading && showDropdown && (
+        <ul className="absolute z-10 mt-1 w-full max-h-48 overflow-auto rounded-md border border-gray-300 bg-white shadow-lg text-sm text-gray-900">
+          {filteredKeyPairs.length > 0 ? (
+            filteredKeyPairs.map((kp, idx) => (
+              <li
+                key={kp}
+                className={`px-3 py-2 cursor-pointer text-sm text-gray-800 ${
+                  idx === highlightedIndex ? 'bg-blue-50 text-blue-900 font-semibold' : 'hover:bg-gray-100'
+                }`}
+                onMouseEnter={() => setHighlightedIndex(idx)}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setFormData(prev => ({
+                    ...prev,
+                    key_pair_name: kp,
+                  }));
+                  setShowDropdown(false);
+                  setHighlightedIndex(null);
+                }}
+              >
+                {kp}
+              </li>
+            ))
+          ) : (
+            <li className="px-3 py-2 text-sm text-gray-500 italic cursor-default">
+              No matching PEM keys
             </li>
-          ))}
+          )}
         </ul>
       )}
 
@@ -1172,7 +1238,7 @@ const handleGroupChange = (
           onClose={() => setIsClusterConfigurationOpen(false)}
           provisionedServers={provisionedServers}
           hideAuth={true}
-          userEmail={formData.user_email}
+          userEmail={formData.user_email || userEmail}
         />
       )}
 

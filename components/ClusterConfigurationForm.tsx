@@ -82,27 +82,23 @@ export default function ClusterConfigurationForm({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // User email state (from props or active session)
-  const [userEmail, setUserEmail] = useState<string>(propUserEmail || '');
+  const [userEmail, setUserEmail] = useState<string>(() => {
+    if (propUserEmail) return propUserEmail;
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('freelabs_user_email') || '';
+    }
+    return '';
+  });
 
   useEffect(() => {
     if (propUserEmail) {
       setUserEmail(propUserEmail);
-      return;
+    } else if (typeof window !== 'undefined') {
+      const savedEmail = sessionStorage.getItem('freelabs_user_email');
+      if (savedEmail) {
+        setUserEmail(savedEmail);
+      }
     }
-    let active = true;
-
-    fetch('/api/auth/profile')
-      .then((res) => res.json())
-      .then((data) => {
-        if (!active) return;
-        const email = data.user?.email || data.user?.email_id || '';
-        if (email) setUserEmail(email);
-      })
-      .catch(() => {});
-
-    return () => {
-      active = false;
-    };
   }, [propUserEmail]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
