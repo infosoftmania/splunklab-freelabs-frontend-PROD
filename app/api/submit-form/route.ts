@@ -342,7 +342,7 @@ export async function POST(req: Request) {
     }
 
     const emailPrefix = user_email ? user_email.split('@')[0] : '';
-    const lab_id = raw_lab_id || emailPrefix || `freelab_${Math.floor(Date.now() / 1000)}`;
+    const lab_id = raw_lab_id || emailPrefix || user_name || 'student';
 
     // -------------------------------------------------------------
     // Guard: Check if instances ALREADY exist for this lab_id in AWS
