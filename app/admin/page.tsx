@@ -9,6 +9,7 @@ type UserSession = {
   email: string;
   name: string;
   isAdmin: boolean;
+  token?: string;
 };
 
 export default function AdminPage() {
@@ -44,7 +45,7 @@ export default function AdminPage() {
             console.warn('[ADMIN] Verify admin check failed:', err);
           }
 
-          const session: UserSession = { email, name, isAdmin };
+          const session: UserSession = { email, name, isAdmin, token };
           setUser(session);
         }
       })
@@ -170,7 +171,7 @@ export default function AdminPage() {
 
       {/* Page Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <AwsForm userEmail={user.email} userName={user.name} />
+        <AwsForm userEmail={user.email} userName={user.name} token={user.token} />
       </main>
     </div>
   );

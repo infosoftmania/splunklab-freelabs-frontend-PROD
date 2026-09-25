@@ -29,6 +29,67 @@ function extractEmailFromToken(token: string): string {
   }
 }
 
+function decodeJwtPayload(t?: string): Record<string, any> {
+  if (!t || typeof t !== 'string' || !t.includes('.')) return {};
+  try {
+    const parts = t.split('.');
+    if (parts.length < 2) return {};
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    return JSON.parse(Buffer.from(base64, 'base64').toString('utf-8'));
+  } catch {
+    return {};
+  }
+}
+
+function isBackendAccessToken(t?: string): boolean {
+  if (!t || typeof t !== 'string' || !t.includes('.')) return false;
+  try {
+    const payload = decodeJwtPayload(t);
+    if (!payload || (!payload.iss && !payload.aud && !payload.sub)) return false;
+
+    // Check expiration if present
+    if (payload.exp && payload.exp * 1000 < Date.now()) {
+      return false; // Expired!
+    }
+
+    // Google ID tokens have accounts.google.com as issuer
+    if (payload.iss && String(payload.iss).includes('accounts.google.com')) {
+      return false;
+    }
+
+    // Backend tokens have my-auth-jwks issuer or my-api audience
+    if (String(payload.iss || '').includes('my-auth-jwks') || payload.aud === 'my-api') {
+      return true;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveBackendToken(req: NextRequest, bodyToken?: string): string {
+  const cookieAccessToken =
+    req.cookies.get('access_token')?.value ||
+    req.cookies.get('token')?.value;
+
+  const rawAuth = req.headers.get('authorization') || req.headers.get('token') || '';
+  const headerToken = rawAuth.replace(/^Bearer\s+/i, '').trim();
+
+  // 1. Prioritize a valid, unexpired backend token from cookie first (server-managed and refreshed)
+  if (isBackendAccessToken(cookieAccessToken)) return cookieAccessToken!;
+
+  // 2. If explicit body/header token is a valid unexpired backend token, use it
+  if (isBackendAccessToken(bodyToken)) return bodyToken!;
+  if (isBackendAccessToken(headerToken)) return headerToken;
+
+  // 3. Fallback to cookie access_token if present
+  if (cookieAccessToken) return cookieAccessToken;
+
+  // 4. Fallback to any token provided
+  return bodyToken || headerToken || req.cookies.get('google_token')?.value || '';
+}
+
 async function checkRegionQuota(
   regionName: string,
   key: string,
@@ -144,14 +205,7 @@ export async function POST(req: NextRequest) {
     const targetRegion = region || 'us-east-1';
 
     // Extract token & resolve user email
-    const authHeader = req.headers.get('authorization') || '';
-    const headerToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : '';
-    const cookieToken =
-      req.cookies.get('google_token')?.value ||
-      req.cookies.get('access_token')?.value ||
-      req.cookies.get('token')?.value ||
-      '';
-    const activeToken = body?.token || body?.access_token || headerToken || cookieToken || '';
+    const activeToken = resolveBackendToken(req, body?.token || body?.access_token);
 
     let userEmail = body?.user_email || body?.email || '';
     if (!userEmail && activeToken) {
@@ -159,23 +213,40 @@ export async function POST(req: NextRequest) {
     }
 
     // 2. Notify upstream Lambda (Freelab-log) to log to Google Sheet
-    // Note: Email is not sent in payload; only token is sent for Lambda to decode
     let upstreamLogged = false;
     let upstreamData: any = null;
     try {
+      const cleanToken = (activeToken || '').replace(/^Bearer\s+/i, '').trim();
+      const upstreamHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (cleanToken) {
+        upstreamHeaders['Authorization'] = `Bearer ${cleanToken}`;
+        upstreamHeaders['token'] = cleanToken;
+      }
+
+      const claims = decodeJwtPayload(cleanToken);
+      console.log(`[VALIDATE-AWS-CRED] Calling log lambda at ${AWS_CRED_VALIDATE_API_URL} (has token: ${Boolean(cleanToken)}, user: ${userEmail || 'unknown'}, iss: ${claims.iss || 'none'}, exp: ${claims.exp ? new Date(claims.exp * 1000).toISOString() : 'none'})`);
+
       const upstreamResp = await fetch(AWS_CRED_VALIDATE_API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: upstreamHeaders,
         body: JSON.stringify({
           aws_access_key: trimmedKey,
           aws_secret_key: trimmedSecret,
-          token: activeToken,
+          token: cleanToken,
           region: targetRegion,
+          reion: targetRegion,
+          user_email: userEmail,
+          email: userEmail,
+          is_admin: isAdmin,
+          mode: isAdmin ? 'admin' : (mode || 'student'),
           timestamp: new Date().toISOString(),
         }),
       });
       upstreamLogged = upstreamResp.ok;
       const upstreamText = await upstreamResp.text();
+      console.log(`[VALIDATE-AWS-CRED] Upstream log lambda response [${upstreamResp.status}]:`, upstreamText);
       try {
         upstreamData = JSON.parse(upstreamText);
         if (upstreamData && typeof upstreamData.body === 'string') {
