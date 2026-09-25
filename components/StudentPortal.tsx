@@ -421,7 +421,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
     setSetupState('in_progress');
 
     const emailPrefix = user.email ? user.email.split('@')[0] : '';
-    const labId = emailPrefix || `freelab_${Math.floor(Date.now() / 1000)}`;
+    const labId = emailPrefix || userName.trim() || 'student';
     setActiveLabId(labId);
     writeLabId(labId);
 

@@ -468,7 +468,7 @@ const handleGroupChange = (
     setSetupState('in_progress');
 
     const emailPrefix = formData.user_email ? formData.user_email.split('@')[0] : '';
-    const labId = emailPrefix || formData.user_name.trim() || `freelab_${Math.floor(Date.now() / 1000)}`;
+    const labId = emailPrefix || formData.user_name.trim() || 'student';
     setActiveLabId(labId);
     writeLabId(labId);
 
