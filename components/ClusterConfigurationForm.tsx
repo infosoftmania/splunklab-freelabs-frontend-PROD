@@ -87,22 +87,7 @@ export default function ClusterConfigurationForm({
   useEffect(() => {
     if (propUserEmail) {
       setUserEmail(propUserEmail);
-      return;
     }
-    let active = true;
-
-    fetch('/api/auth/profile')
-      .then((res) => res.json())
-      .then((data) => {
-        if (!active) return;
-        const email = data.user?.email || data.user?.email_id || '';
-        if (email) setUserEmail(email);
-      })
-      .catch(() => {});
-
-    return () => {
-      active = false;
-    };
   }, [propUserEmail]);
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
