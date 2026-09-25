@@ -35,7 +35,7 @@ export default function KeyDownloadButton({
     setSuccess(null);
 
     try {
-      const res = await fetch('/api/create-key-pair', {
+      const res = await fetch('/api/keypair-validation/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

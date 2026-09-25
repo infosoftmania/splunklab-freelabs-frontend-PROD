@@ -31,7 +31,6 @@ export async function POST(request: NextRequest) {
 
     const token =
       request.cookies.get('access_token')?.value ||
-      request.cookies.get('token')?.value ||
       request.cookies.get('google_token')?.value ||
       request.cookies.get('refresh_token')?.value ||
       request.headers.get('authorization')?.replace(/^Bearer\s+/i, '');

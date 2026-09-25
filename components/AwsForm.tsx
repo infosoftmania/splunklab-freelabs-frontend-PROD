@@ -5,6 +5,7 @@ import InputField from './InputField';
 import KeyDownloadButton from './KeyDownloadButton';
 import ClusterConfigurationForm from './ClusterConfigurationForm';
 import { readLabId, writeLabId, removeLabId, readAwsCredentials, removeAwsCredentials, writeAwsCredentials } from '../lib/lab-storage';
+import { parseAwsValidationResponse } from '../lib/aws-validation';
 import environments from '../data/environments.json';
 import awsRegions from '../data/awsRegions.json';
 
@@ -159,8 +160,9 @@ export default function AwsForm({ userEmail = '', userName = '', token = '' }: A
   );
 
   useEffect(() => {
-    if (!activeLabId) {
-      const storedLabId = readLabId();
+    const email = (formData.user_email || userEmail).trim();
+    if (!activeLabId && email) {
+      const storedLabId = readLabId(email);
       if (storedLabId) setActiveLabId(storedLabId);
     }
 
@@ -233,7 +235,7 @@ export default function AwsForm({ userEmail = '', userName = '', token = '' }: A
 
     setKeyPairsLoading(true);
     try {
-      const res = await fetch('/api/list-keypairs', {
+      const res = await fetch('/api/keypair-validation/list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -326,24 +328,35 @@ const handleGroupChange = (
         }),
       });
 
-      const data = await res.json();
+      const rawData = await res.json();
+      const result = parseAwsValidationResponse(rawData, true, formData.region || 'us-east-1');
 
-      if (!data.valid_account) {
-        const errorMsg = data.message || 'Invalid AWS credentials';
-        setAwsAccessMessage(errorMsg);
-        setAwsSecretMessage(errorMsg);
+      if (!result.success || !result.valid_account) {
+        setAwsAccessMessage(result.message);
+        setAwsSecretMessage(result.message);
         setAwsValid(false);
       } else {
-        setAwsAccessMessage('AWS Access Key is valid');
-        setAwsSecretMessage('AWS Secret Key is valid');
+        setAwsAccessMessage(result.message);
+        setAwsSecretMessage(result.message);
         setAwsValid(true);
-        if (data.regions_summary && Array.isArray(data.regions_summary)) {
-          setRegionsSummary(data.regions_summary);
+        if (result.regions_summary && Array.isArray(result.regions_summary)) {
+          setRegionsSummary(result.regions_summary);
         }
-        setIsMultiRegionMode(Boolean(data.is_multi_region));
-        const effectiveRegion = data.region || formData.region || 'us-east-1';
+        setIsMultiRegionMode(Boolean(result.is_multi_region));
+        const effectiveRegion = result.region || formData.region || 'us-east-1';
         setFormData((prev) => ({ ...prev, region: effectiveRegion }));
         fetchKeyPairsForRegion(effectiveRegion);
+
+        writeAwsCredentials(formData.user_email || userEmail, {
+          accessKey: formData.aws_access_key.trim(),
+          secretKey: formData.aws_secret_key.trim(),
+          status: 'valid',
+          region: effectiveRegion,
+          available_vcpus: result.available_vcpus,
+          total_quota: result.total_quota,
+          validatedAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        });
       }
     } catch (err) {
       console.error(err);
@@ -377,11 +390,12 @@ const handleGroupChange = (
   };
 
   useEffect(() => {
-    if (!formData.user_email.trim() || activeLabId) return;
+    const email = (formData.user_email || userEmail).trim();
+    if (!email || activeLabId) return;
 
-    const storedLabId = readLabId();
+    const storedLabId = readLabId(email);
     if (storedLabId) setActiveLabId(storedLabId);
-  }, [formData.user_email, activeLabId]);
+  }, [formData.user_email, userEmail, activeLabId]);
 
   // -------------------------
   // Status Polling for 16 Servers
@@ -389,19 +403,14 @@ const handleGroupChange = (
   const startPollingStatus = (labId: string, currentRegion?: string, currentEmail?: string, currentName?: string) => {
     stopAllIntervals();
     setElapsedSeconds(0);
-    setLiveStatusText('Initiating 16 servers on AWS...');
+    setLiveStatusText('Setting up your lab environment, please wait...');
     setSetupState('in_progress');
-
-    // Timer: counts up every second
-    timerIntervalRef.current = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
 
     let attempts = 0;
     const pollCheck = async () => {
       attempts++;
       try {
-        const res = await fetch('/api/lab-status', {
+        const res = await fetch('/api/environment-creation/lab-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -419,15 +428,13 @@ const handleGroupChange = (
         const data = await res.json();
         if (data.success && data.instance_count > 0) {
           const servers = data.servers || {};
-          writeLabId(labId);
+          writeLabId(labId, currentEmail || formData.user_email || userEmail);
           const serverCount = Object.keys(servers).length;
 
           // Count instances with public IP assigned
           const readyWithIps = Object.values(servers).filter(
             (s: any) => s.public_ip && s.public_ip !== 'N/A'
           ).length;
-
-          setLiveStatusText(`${serverCount}/16 servers created (${readyWithIps} ready with Public IPs)...`);
 
           // When all 16 servers are ready with public IPs
           if (serverCount >= 16 && readyWithIps >= 16) {
@@ -436,7 +443,9 @@ const handleGroupChange = (
             setSetupState('completed');
             setIsSubmitting(false);
             setSuccessMessage('✅ Environment setup done! All 16 servers are ready.');
-            writeLabId(labId);
+            writeLabId(labId, currentEmail || formData.user_email || userEmail);
+          } else {
+            setLiveStatusText('Setting up your lab environment, please wait...');
           }
         }
       } catch (err) {
@@ -471,7 +480,7 @@ const handleGroupChange = (
 
     try {
       const emailPrefix = formData.user_email ? formData.user_email.split('@')[0] : '';
-      const res = await fetch('/api/lab-status', {
+      const res = await fetch('/api/environment-creation/lab-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -488,11 +497,24 @@ const handleGroupChange = (
       if (data.success && data.instance_count > 0 && data.servers && Object.keys(data.servers).length > 0) {
         if (data.lab_id) {
           setActiveLabId(data.lab_id);
-          writeLabId(data.lab_id);
+          writeLabId(data.lab_id, formData.user_email || userEmail);
         }
-        setProvisionedServers(data.servers);
-        setSetupState('completed');
-        setSuccessMessage(`✅ Found ${data.instance_count} active servers in your account!`);
+        const serverCount = Object.keys(data.servers).length;
+        const readyWithIps = Object.values(data.servers).filter(
+          (s: any) => s.public_ip && s.public_ip !== 'N/A'
+        ).length;
+        const targetLabId = data.lab_id || activeLabId || emailPrefix;
+        if (serverCount >= 16 && readyWithIps >= 16) {
+          stopAllIntervals();
+          setProvisionedServers(data.servers);
+          setSetupState('completed');
+          setSuccessMessage(`✅ Found all ${serverCount} active servers in your account!`);
+        } else {
+          setProvisionedServers(null);
+          setSetupState('in_progress');
+          setLiveStatusText('Setting up your lab environment, please wait...');
+          startPollingStatus(targetLabId, checkRegion);
+        }
       } else {
         setSuccessMessage('ℹ️ No active servers found. Click Submit to create them.');
       }
@@ -522,7 +544,7 @@ const handleGroupChange = (
     const emailPrefix = formData.user_email ? formData.user_email.split('@')[0] : '';
     const labId = emailPrefix || formData.user_name.trim() || 'student';
     setActiveLabId(labId);
-    writeLabId(labId);
+    writeLabId(labId, formData.user_email || userEmail);
 
     const payload = {
       action: 'PROVISION',
@@ -540,7 +562,7 @@ const handleGroupChange = (
     startPollingStatus(labId, formData.region, formData.user_email, formData.user_name);
 
     try {
-      const res = await fetch('/api/submit-form', {
+      const res = await fetch('/api/environment-creation/submit-form', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -592,7 +614,7 @@ const handleGroupChange = (
 
     try {
       const targetLabId = activeLabId || (formData.user_email ? formData.user_email.split('@')[0] : '');
-      const res = await fetch('/api/submit-form', {
+      const res = await fetch('/api/environment-creation/submit-form', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -612,7 +634,7 @@ const handleGroupChange = (
         setProvisionedServers(null);
         setSetupState('idle');
         setActiveLabId(null);
-        removeLabId();
+        removeLabId(formData.user_email || userEmail);
         setIsClusterConfigurationOpen(false);
         setIsDestroyModalOpen(false);
         setDestroyConfirmChecked(false);
@@ -1048,29 +1070,17 @@ const handleGroupChange = (
 
           {/* Progress Banner: Environment setup, please wait... */}
           {setupState === 'in_progress' && (
-            <div className="p-6 border border-blue-200 rounded-xl bg-white shadow-sm w-full">
+            <div className="p-6 border border-blue-200 rounded-xl bg-blue-50/70 shadow-sm w-full">
               <div className="flex items-center gap-3">
                 <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin flex-shrink-0" />
                 <div>
                   <h4 className="text-sm font-bold text-blue-900">
-                    Environment setup, please wait...
+                    Setting up your lab environment, please wait...
                   </h4>
                   <p className="text-xs text-blue-700 mt-0.5">
-                    Creating 16 servers on AWS ({formData.region || 'us-east-1'}). Time elapsed: <strong>{elapsedSeconds}s</strong>
+                    {liveStatusText || 'All 16 servers will appear automatically once fully initialized.'}
                   </p>
                 </div>
-              </div>
-
-              <div className="w-full bg-blue-100 rounded-full h-2.5 mt-4 overflow-hidden">
-                <div
-                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-500 ease-out"
-                  style={{ width: `${Math.min(95, Math.max(8, (elapsedSeconds / 45) * 100))}%` }}
-                />
-              </div>
-
-              <div className="flex items-center justify-between text-[11px] text-blue-800 mt-3 font-medium">
-                <span>{liveStatusText || 'Creating EC2 instances...'}</span>
-                <span>~45s total</span>
               </div>
             </div>
           )}

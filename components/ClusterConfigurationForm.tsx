@@ -199,14 +199,10 @@ export default function ClusterConfigurationForm({
       setProgressStep('splunk');
       setStatusMessage('Validating Splunk accessibility on port 8000...');
 
-      const splunkResponse = await fetch('/api/lab-proxy', {
+      const splunkResponse = await fetch('/api/validation/port', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: '/splunk-validate',
-          method: 'POST',
-          body: { public_ips: allPublicIps },
-        }),
+        body: JSON.stringify({ public_ips: allPublicIps }),
       });
 
       const splunkData = await splunkResponse.json();
@@ -238,17 +234,13 @@ export default function ClusterConfigurationForm({
 
       setStatusMessage('Validating Splunk Enterprise license on Management_server...');
 
-      const licenseResponse = await fetch('/api/lab-proxy', {
+      const licenseResponse = await fetch('/api/validation/license', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          path: '/validate-splunk-license',
-          method: 'POST',
-          body: {
-            management_server_ip: managementIp,
-            username: 'admin',
-            password: 'admin123',
-          },
+          management_server_ip: managementIp,
+          username: 'admin',
+          password: 'admin123',
         }),
       });
 

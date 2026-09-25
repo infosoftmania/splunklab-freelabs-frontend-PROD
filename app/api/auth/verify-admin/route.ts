@@ -41,9 +41,7 @@ function isBackendAccessToken(t?: string): boolean {
  * Prioritizes the backend access_token from cookies or body over raw Google tokens.
  */
 function resolveBackendToken(req: NextRequest, bodyToken?: string): string {
-  const cookieAccessToken =
-    req.cookies.get('access_token')?.value ||
-    req.cookies.get('token')?.value;
+  const cookieAccessToken = req.cookies.get('access_token')?.value;
 
   const authHeader = req.headers.get('authorization') || '';
   const headerToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7).trim() : '';

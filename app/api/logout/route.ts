@@ -19,9 +19,7 @@ const expiredCookieOptions = {
 export async function POST(request: NextRequest) {
   try {
     const sessionId = request.cookies.get('session_id')?.value;
-    const accessToken =
-      request.cookies.get('access_token')?.value ||
-      request.cookies.get('token')?.value;
+    const accessToken = request.cookies.get('access_token')?.value;
 
     if (sessionId && AUTH_API) {
       await fetch(`${AUTH_API}/auth/logout`, {

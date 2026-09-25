@@ -16,6 +16,12 @@ import {
   type StoredLabServer,
 } from '../lib/lab-storage';
 
+import {
+  parseAwsValidationResponse,
+  buildVerificationBadge,
+  type CredValidationStatus,
+} from '../lib/aws-validation';
+
 type StudentUser = {
   name: string;
   email: string;
@@ -29,35 +35,11 @@ type Props = {
   onSwitchToAdmin?: () => void;
 };
 
-type CredValidationStatus = 'idle' | 'valid' | 'invalid_account' | 'insufficient_vcpu' | 'insufficient_eip';
-
 type QuotaDetails = {
   available_vcpus?: number;
   region?: string;
   total_quota?: number;
   permission_denied?: boolean;
-};
-
-const formatVerificationTime = (validatedAt?: string) => {
-  if (!validatedAt) return '';
-
-  const parsedDate = new Date(validatedAt);
-  if (Number.isNaN(parsedDate.getTime())) return '';
-
-  return parsedDate.toLocaleString();
-};
-
-const buildVerificationBadge = (
-  availableVcpus: number | undefined,
-  region: string,
-  validatedAt?: string,
-  hasAwsCredentials = true
-) => {
-  const verifiedTime = formatVerificationTime(validatedAt);
-  const timeText = verifiedTime ? ` Last verified ${verifiedTime}.` : '';
-  const credentialText = hasAwsCredentials ? ' Ready to configure.' : ' Re-enter AWS keys to continue.';
-
-  return `AWS Account Verified! Found ${availableVcpus ?? 36} vCPUs in ${region}.${credentialText}${timeText}`;
 };
 
 export default function StudentPortal({ user, onLogout }: Props) {
@@ -146,7 +128,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
   const fetchKeyPairs = useCallback(async (ak: string, sk: string, reg: string) => {
     setKeyPairsLoading(true);
     try {
-      const res = await fetch('/api/list-keypairs', {
+      const res = await fetch('/api/keypair-validation/list', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -170,7 +152,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
   }, []);
 
   useEffect(() => {
-    const storedLabId = readLabId();
+    const storedLabId = readLabId(user.email);
     if (storedLabId) setActiveLabId(storedLabId);
     removeLegacyLabSnapshot(user.email);
 
@@ -203,7 +185,13 @@ export default function StudentPortal({ user, onLogout }: Props) {
         );
         fetchKeyPairs(storedAwsCredentials.accessKey, storedAwsCredentials.secretKey, restoredRegion);
       } else if (storedAwsCredentials.status === 'insufficient_vcpu') {
-        setErrorMessage(storedAwsCredentials.message || 'Previous AWS validation did not pass.');
+        if (user.isAdmin) {
+          setCredValidationStatus('valid');
+          setSuccessBadge(`⚠️ Admin access: Verified with ${storedAwsCredentials.available_vcpus ?? 0} vCPUs in ${restoredRegion}.`);
+          fetchKeyPairs(storedAwsCredentials.accessKey, storedAwsCredentials.secretKey, restoredRegion);
+        } else {
+          setErrorMessage(storedAwsCredentials.message || 'Previous AWS validation did not pass.');
+        }
       }
     }
     removeAwsVerification(user.email);
@@ -257,7 +245,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
 
     try {
       const emailPrefix = user.email ? user.email.split('@')[0] : '';
-      const res = await fetch('/api/lab-status', {
+      const res = await fetch('/api/environment-creation/lab-status', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -285,15 +273,25 @@ export default function StudentPortal({ user, onLogout }: Props) {
 
       if (labId) {
         setActiveLabId(labId);
-        writeLabId(labId);
+        writeLabId(labId, user.email);
       }
 
-      if (serverCount > 0) {
+      if (serverCount > 0 && isComplete) {
+        stopAllIntervals();
         setProvisionedServers(servers);
-        setSetupState(isComplete ? 'completed' : 'in_progress');
-        setLiveStatusText(`${serverCount} lab servers found (${readyWithIps} ready with public IPs).`);
+        setSetupState('completed');
+        setLiveStatusText('');
+      } else if (serverCount > 0 && !isComplete) {
+        setProvisionedServers(null);
+        setSetupState('in_progress');
+        setLiveStatusText('Please wait, setting up your lab environment...');
+        startPollingStatus(labId, targetRegion);
       } else {
-        setLiveStatusText('No active lab servers found.');
+        stopAllIntervals();
+        setProvisionedServers(null);
+        setSetupState('idle');
+        setLiveStatusText('');
+        setErrorMessage('No active lab servers found. Click Launch FreeLabs Environment to start.');
       }
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Unable to load lab status.');
@@ -336,40 +334,39 @@ export default function StudentPortal({ user, onLogout }: Props) {
           region: targetRegion,
           user_email: user.email,
           email: user.email,
-          is_admin: false,
-          mode: 'student',
+          is_admin: Boolean(user.isAdmin),
+          mode: user.isAdmin ? 'admin' : 'student',
         }),
       });
 
-      const data = await res.json();
+      const rawData = await res.json();
+      const result = parseAwsValidationResponse(rawData, user.isAdmin, targetRegion);
 
-      if (!data.valid_account) {
-        const message = data.message || 'Invalid AWS Credentials. Account not found or inactive.';
+      if (result.status === 'invalid_account') {
         setCredValidationStatus('invalid_account');
-        setErrorMessage(message);
+        setErrorMessage(result.message);
         removeAwsCredentials(user.email);
         removeAwsVerification(user.email);
         return;
       }
 
-      if (!data.has_required_vcpu) {
+      if (result.status === 'insufficient_vcpu') {
         setCredValidationStatus('insufficient_vcpu');
         const quotaInfo = {
-          available_vcpus: data.available_vcpus,
-          region: data.region || targetRegion,
-          total_quota: data.total_quota,
-          permission_denied: Boolean(data.permission_denied),
+          available_vcpus: result.available_vcpus,
+          region: result.region,
+          total_quota: result.total_quota,
+          permission_denied: Boolean(result.permission_denied),
         };
-        const message = data.message || `Insufficient vCPU Quota: Found ${data.available_vcpus ?? 0} vCPUs in ${targetRegion}. At least 36 vCPUs in one region are required. Please request an increase up to 36+ vCPUs in AWS Service Quotas.`;
         setQuotaDetails(quotaInfo);
-        setErrorMessage(message);
+        setErrorMessage(result.message);
         writeAwsCredentials(user.email, {
           accessKey: awsAccessKey.trim(),
           secretKey: awsSecretKey.trim(),
           status: 'insufficient_vcpu',
           ...quotaInfo,
-          message,
-          account_id: data.account_id,
+          message: result.message,
+          account_id: result.account_id,
           validatedAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
         });
@@ -377,37 +374,40 @@ export default function StudentPortal({ user, onLogout }: Props) {
         return;
       }
 
-      if (data.has_required_eips === false) {
+      if (result.status === 'insufficient_eip') {
         setCredValidationStatus('insufficient_eip');
         const eipInfo = {
-          available_eips: data.available_eips ?? 0,
-          required_eips: data.required_eips ?? 9,
-          region: data.region || targetRegion,
-          total_quota: data.total_eip_quota,
+          available_eips: result.available_eips,
+          required_eips: result.required_eips,
+          region: result.region,
+          total_quota: result.total_eip_quota,
         };
         setEipDetails(eipInfo);
-        setErrorMessage(data.message || `Insufficient Elastic IP Quota: Your AWS account in ${data.region || targetRegion} currently has ${data.available_eips ?? 0} Elastic IPs available, but at least ${data.required_eips ?? 9} are required for the 9 Splunk servers.`);
+        setErrorMessage(result.message);
         return;
       }
 
       // PASSED: Valid account, >= 36 vCPUs, and >= 9 Elastic IPs!
-      const verifiedRegion = data.region || targetRegion || 'us-east-1';
+      const verifiedRegion = result.region || targetRegion || 'us-east-1';
       const validatedAt = new Date().toISOString();
-      const badge = buildVerificationBadge(data.available_vcpus, verifiedRegion, validatedAt);
+      const badge = result.message
+        ? `✅ ${result.message} (${result.available_vcpus} vCPUs & ${result.available_eips} Elastic IPs in ${verifiedRegion})`
+        : buildVerificationBadge(result.available_vcpus, verifiedRegion, validatedAt);
       const verifiedQuota = {
-        available_vcpus: data.available_vcpus,
+        available_vcpus: result.available_vcpus,
         region: verifiedRegion,
-        total_quota: data.total_quota,
+        total_quota: result.total_quota,
       };
 
       setTargetRegion(verifiedRegion);
       setCredValidationStatus('valid');
+      setErrorMessage('');
       setQuotaDetails(verifiedQuota);
       setEipDetails({
-        available_eips: data.available_eips,
-        required_eips: data.required_eips ?? 9,
+        available_eips: result.available_eips,
+        required_eips: result.required_eips,
         region: verifiedRegion,
-        total_quota: data.total_eip_quota,
+        total_quota: result.total_eip_quota,
       });
       setSuccessBadge(badge);
       writeAwsCredentials(user.email, {
@@ -415,8 +415,8 @@ export default function StudentPortal({ user, onLogout }: Props) {
         secretKey: awsSecretKey.trim(),
         status: 'valid',
         ...verifiedQuota,
-        account_id: data.account_id,
-        message: data.message,
+        account_id: result.account_id,
+        message: result.message,
         validatedAt,
         updatedAt: validatedAt,
       });
@@ -463,12 +463,12 @@ export default function StudentPortal({ user, onLogout }: Props) {
     const emailPrefix = user.email ? user.email.split('@')[0] : '';
     const labId = emailPrefix || userName.trim() || 'student';
     setActiveLabId(labId);
-    writeLabId(labId);
+    writeLabId(labId, user.email);
 
     startPollingStatus(labId, targetRegion);
 
     try {
-      const res = await fetch('/api/submit-form', {
+      const res = await fetch('/api/environment-creation/submit-form', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -492,7 +492,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
           setProvisionedServers(servers);
           setSetupState('completed');
           setIsSubmitting(false);
-          writeLabId(labId);
+          writeLabId(labId, user.email);
         }
         return;
       }
@@ -514,19 +514,15 @@ export default function StudentPortal({ user, onLogout }: Props) {
   const startPollingStatus = (labId: string, currentRegion?: string) => {
     stopAllIntervals();
     setElapsedSeconds(0);
-    const initialStatus = 'Initiating 16 servers in us-east-1 on AWS...';
+    const initialStatus = 'Setting up your lab environment, please wait...';
     setLiveStatusText(initialStatus);
     setSetupState('in_progress');
-
-    timerIntervalRef.current = setInterval(() => {
-      setElapsedSeconds((prev) => prev + 1);
-    }, 1000);
 
     let attempts = 0;
     const pollCheck = async () => {
       attempts++;
       try {
-        const res = await fetch('/api/lab-status', {
+        const res = await fetch('/api/environment-creation/lab-status', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -544,28 +540,28 @@ export default function StudentPortal({ user, onLogout }: Props) {
         const data = await res.json();
         if (data.success && data.instance_count > 0) {
           const servers = (data.servers || {}) as Record<string, StoredLabServer>;
-          writeLabId(labId);
+          writeLabId(labId, user.email);
           const serverCount = Object.keys(servers).length;
           const readyWithIps = Object.values(servers).filter(
             (server) => server.public_ip && server.public_ip !== 'N/A'
           ).length;
-
-          const statusMsg = `${serverCount}/16 servers created in us-east-1 (${readyWithIps} ready with Public IPs)...`;
-          setLiveStatusText(statusMsg);
 
           if (serverCount >= 16 && readyWithIps >= 16) {
             stopAllIntervals();
             setProvisionedServers(servers);
             setSetupState('completed');
             setIsSubmitting(false);
-            writeLabId(labId);
+            setLiveStatusText('');
+            writeLabId(labId, user.email);
+          } else {
+            setLiveStatusText('Setting up your lab environment, please wait...');
           }
         }
       } catch (err) {
         console.warn('[STATUS-POLL] Error:', err);
       }
 
-      if (attempts >= 30) {
+      if (attempts >= 45) {
         stopAllIntervals();
         setIsSubmitting(false);
         const timeoutMsg = 'Provisioning is taking longer than expected. Please check your AWS EC2 Console.';
@@ -593,7 +589,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
 
     try {
       const targetLabId = activeLabId || (user.email ? user.email.split('@')[0] : '');
-      const res = await fetch('/api/submit-form', {
+      const res = await fetch('/api/environment-creation/submit-form', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -613,7 +609,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
         setProvisionedServers(null);
         setSetupState('idle');
         setActiveLabId(null);
-        removeLabId();
+        removeLabId(user.email);
         setIsClusterConfigOpen(false);
         setIsDestroyModalOpen(false);
         setDestroyConfirmChecked(false);
@@ -793,6 +789,11 @@ export default function StudentPortal({ user, onLogout }: Props) {
               <p className="text-sm font-extrabold text-red-700 flex items-center gap-1.5">
                 <span>❌ Insufficient vCPU Quota</span>
               </p>
+              {errorMessage && (
+                <p className="text-xs font-semibold text-red-900 mt-1.5 mb-1 bg-red-100/80 p-2 rounded border border-red-200">
+                  {errorMessage}
+                </p>
+              )}
               <p className="text-xs text-red-700 mt-1.5 leading-relaxed">
                 Your AWS account in <strong className="underline">{quotaDetails?.region || 'us-east-1'}</strong> currently has{' '}
                 <strong className="text-red-900 bg-red-100 px-1 py-0.5 rounded">{quotaDetails?.available_vcpus ?? 0} vCPUs</strong> available.
@@ -818,6 +819,11 @@ export default function StudentPortal({ user, onLogout }: Props) {
           <p className="text-sm font-extrabold text-amber-800 flex items-center gap-1.5">
             <span>⚠️ Insufficient Elastic IP (EIP) Quota</span>
           </p>
+          {errorMessage && (
+            <p className="text-xs font-semibold text-amber-950 mt-1.5 mb-1 bg-amber-100/80 p-2 rounded border border-amber-200">
+              {errorMessage}
+            </p>
+          )}
           <p className="text-xs text-amber-800 mt-1.5 leading-relaxed">
             Your AWS account in <strong className="underline">{eipDetails?.region || 'us-east-1'}</strong> currently has{' '}
             <strong className="text-amber-950 bg-amber-100 px-1 py-0.5 rounded">{eipDetails?.available_eips ?? 0} Elastic IPs</strong> available.
@@ -1020,9 +1026,14 @@ export default function StudentPortal({ user, onLogout }: Props) {
             {/* PROVISIONING PROGRESS & STATUS */}
             {setupState === 'in_progress' && (
               <div className="bg-white rounded-xl shadow-sm border border-blue-200 overflow-hidden">
-                <div className="p-6 bg-blue-50 text-center">
-                  <p className="text-sm font-semibold text-blue-900 animate-pulse">{liveStatusText}</p>
-                  <p className="text-xs text-blue-600 mt-1">Time elapsed: {elapsedSeconds}s</p>
+                <div className="p-8 bg-blue-50/70 text-center flex flex-col items-center justify-center">
+                  <div className="w-8 h-8 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mb-3" />
+                  <p className="text-sm font-bold text-blue-900">
+                    {liveStatusText || 'Setting up your lab environment, please wait...'}
+                  </p>
+                  <p className="text-xs text-blue-600 mt-1">
+                    All 16 servers will appear automatically once fully initialized.
+                  </p>
                 </div>
               </div>
             )}

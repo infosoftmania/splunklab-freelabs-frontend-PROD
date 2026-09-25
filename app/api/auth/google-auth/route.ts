@@ -4,7 +4,6 @@ export const dynamic = 'force-dynamic';
 
 const AUTH_API = (
   process.env.NEXT_PUBLIC_AUTH_URL ||
-  process.env.AUTH_URL ||
   ''
 ).replace(/\/+$/, '');
 
@@ -213,10 +212,6 @@ export async function POST(req: NextRequest) {
 
       if (typeof rawData.access_token === 'string' && rawData.access_token) {
         nextResponse.cookies.set('access_token', rawData.access_token, {
-          ...directCookieOpts,
-          maxAge: 86400,
-        });
-        nextResponse.cookies.set('token', rawData.access_token, {
           ...directCookieOpts,
           maxAge: 86400,
         });
