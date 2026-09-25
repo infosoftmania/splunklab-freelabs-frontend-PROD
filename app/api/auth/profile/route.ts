@@ -65,8 +65,17 @@ export async function GET(request: NextRequest) {
 
       if (response.ok) {
         const data = await response.json();
+
+        let effectiveToken = activeToken;
+        for (const cookieStr of refreshSetCookies) {
+          const match = cookieStr.match(/(?:^|;\s*)(?:access_token|token)=([^;]+)/i);
+          if (match && match[1]) {
+            effectiveToken = decodeURIComponent(match[1]);
+          }
+        }
+
         const nextResponse = NextResponse.json(
-          { authenticated: true, user: data?.user || data?.profile || fallbackUser, token: activeToken },
+          { authenticated: true, user: data?.user || data?.profile || fallbackUser, token: effectiveToken },
           { status: 200 },
         );
 

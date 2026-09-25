@@ -21,6 +21,7 @@ type AdminFormData = {
 type AwsFormProps = {
   userEmail?: string;
   userName?: string;
+  token?: string;
 };
 
 type RegionQuotaSummary = {
@@ -36,7 +37,7 @@ type RegionQuotaSummary = {
   used_eips: number;
 };
 
-export default function AwsForm({ userEmail = '', userName = '' }: AwsFormProps) {
+export default function AwsForm({ userEmail = '', userName = '', token = '' }: AwsFormProps) {
   const [selectedGroup, setSelectedGroup] = useState('project_5');
   const [awsValid, setAwsValid] = useState<boolean | null>(null);
   const [regionsSummary, setRegionsSummary] = useState<RegionQuotaSummary[] | null>(null);
@@ -244,14 +245,30 @@ const handleGroupChange = (
     setIsMultiRegionMode(false);
 
     try {
+      let activeToken = token || '';
+      if (!activeToken) {
+        try {
+          const profRes = await fetch('/api/auth/profile');
+          const profData = await profRes.json();
+          if (profData?.token) {
+            activeToken = profData.token;
+          }
+        } catch {}
+      }
+
       const res = await fetch('/api/validate-aws-cred', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(activeToken ? { Authorization: `Bearer ${activeToken}` } : {}),
+        },
         body: JSON.stringify({
           aws_access_key: formData.aws_access_key.trim(),
           aws_secret_key: formData.aws_secret_key.trim(),
           region: formData.region || 'us-east-1',
-          user_email: formData.user_email,
+          user_email: formData.user_email || userEmail,
+          email: formData.user_email || userEmail,
+          token: activeToken,
           is_admin: true,
           mode: 'admin',
         }),

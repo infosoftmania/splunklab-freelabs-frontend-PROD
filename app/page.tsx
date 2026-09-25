@@ -1,8 +1,6 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import Link from 'next/link';
-import AwsForm from '../components/AwsForm';
 import StudentPortal from '../components/StudentPortal';
 import GoogleSignInCard from '../components/GoogleSignInCard';
 
@@ -16,7 +14,6 @@ type UserSession = {
 export default function HomePage() {
   const [user, setUser] = useState<UserSession | null>(null);
   const [loading, setLoading] = useState(true);
-  const [viewMode, setViewMode] = useState<'admin' | 'student'>('student');
 
   useEffect(() => {
     let active = true;
@@ -51,7 +48,6 @@ export default function HomePage() {
 
           const session: UserSession = { email, name, isAdmin, token };
           setUser(session);
-          setViewMode(isAdmin ? 'admin' : 'student');
         }
       })
       .catch((err) => {
@@ -75,7 +71,6 @@ export default function HomePage() {
 
   const handleLoginSuccess = (loggedInUser: UserSession) => {
     setUser(loggedInUser);
-    setViewMode(loggedInUser.isAdmin ? 'admin' : 'student');
   };
 
   if (loading) {
@@ -101,52 +96,12 @@ export default function HomePage() {
     );
   }
 
-  // 2. Authenticated as Admin (or Admin Mode Preview)
-  if (user.isAdmin && viewMode === 'admin') {
-    return (
-      <div className="min-h-screen bg-gray-50 py-8 px-4 sm:px-6 lg:px-8">
-        <div className="max-w-7xl mx-auto mb-6 bg-purple-50 border border-purple-200 rounded-xl p-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-bold text-purple-900">👑 Admin Portal</span>
-            <span className="text-xs text-purple-700">({user.email})</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <Link
-              href="/admin"
-              className="text-xs font-semibold px-2.5 py-1 bg-purple-100 text-purple-800 rounded-lg hover:bg-purple-200 border border-purple-300 shadow-sm"
-            >
-              👑 Open /admin
-            </Link>
-            <button
-              type="button"
-              onClick={() => setViewMode('student')}
-              className="text-xs font-semibold px-2.5 py-1 bg-white text-purple-700 rounded-lg hover:bg-purple-100 border border-purple-200 shadow-sm"
-            >
-              👁️ Preview Student View
-            </button>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="text-xs text-red-600 hover:text-red-700 font-semibold px-2 py-1"
-            >
-              Logout
-            </button>
-          </div>
-        </div>
-
-        <div className="max-w-7xl mx-auto">
-          <AwsForm userEmail={user.email} userName={user.name} />
-        </div>
-      </div>
-    );
-  }
-
-  // 3. Authenticated as Student (Progressive 36-vCPU Quota Verification)
+  // 2. Authenticated: Always render Student Portal at '/'
+  // (Admins can access Admin Console via the '👑 Admin Console' header button linking to /admin)
   return (
     <StudentPortal
       user={user}
       onLogout={handleLogout}
-      onSwitchToAdmin={user.isAdmin ? () => setViewMode('admin') : undefined}
     />
   );
 }

@@ -273,7 +273,14 @@ export default function StudentPortal({ user, onLogout }: Props) {
     setSuccessBadge('');
     setCredValidationStatus('idle');
 
-    const storedToken = user.token || '';
+    let storedToken = user.token || '';
+    try {
+      const profRes = await fetch('/api/auth/profile');
+      const profData = await profRes.json();
+      if (profData?.token) {
+        storedToken = profData.token;
+      }
+    } catch {}
 
     try {
       const res = await fetch('/api/validate-aws-cred', {
@@ -287,6 +294,10 @@ export default function StudentPortal({ user, onLogout }: Props) {
           aws_secret_key: awsSecretKey.trim(),
           token: storedToken,
           region: targetRegion,
+          user_email: user.email,
+          email: user.email,
+          is_admin: false,
+          mode: 'student',
         }),
       });
 
