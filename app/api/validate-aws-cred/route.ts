@@ -180,6 +180,121 @@ async function checkRegionElasticIpQuota(
   return { region: regionName, quota: quotaValue, used: usedEips, available };
 }
 
+async function callUpstreamLogLambda(params: {
+  trimmedKey: string;
+  trimmedSecret: string;
+  cleanToken: string;
+  userEmail: string;
+  targetRegion: string;
+  isAdmin: boolean;
+  mode: string;
+  accountId: string;
+  availableVcpus: number;
+  quotaVcpus: number;
+  usedVcpus: number;
+  availableEips: number;
+  quotaEips: number;
+  usedEips: number;
+  hasRequiredVcpu: boolean;
+  hasRequiredEips: boolean;
+  isValidAccount: boolean;
+  isSuccess: boolean;
+  regionsSummary?: any[];
+  allocationPlan?: any[];
+  failureReason?: string;
+}): Promise<boolean> {
+  try {
+    const upstreamHeaders: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (params.cleanToken) {
+      upstreamHeaders['Authorization'] = `Bearer ${params.cleanToken}`;
+      upstreamHeaders['token'] = params.cleanToken;
+    }
+
+    const payload = {
+      // Credential variants for compatibility with various Lambda parsers / boto3
+      aws_access_key: params.trimmedKey,
+      aws_secret_key: params.trimmedSecret,
+      aws_access_key_id: params.trimmedKey,
+      aws_secret_access_key: params.trimmedSecret,
+      access_key: params.trimmedKey,
+      secret_key: params.trimmedSecret,
+      access_key_id: params.trimmedKey,
+      secret_access_key: params.trimmedSecret,
+      AccessKeyId: params.trimmedKey,
+      SecretAccessKey: params.trimmedSecret,
+
+      // Token and auth
+      token: params.cleanToken,
+      user_email: params.userEmail,
+      email: params.userEmail,
+      is_admin: params.isAdmin,
+      mode: params.isAdmin ? 'admin' : (params.mode || 'student'),
+
+      // Account & Region
+      account_id: params.accountId,
+      accountId: params.accountId,
+      region: params.targetRegion,
+      reion: params.targetRegion,
+      target_region: params.targetRegion,
+
+      // vCPU Quotas
+      available_vcpus: params.availableVcpus,
+      available_vcpu: params.availableVcpus,
+      quota_vcpus: params.quotaVcpus,
+      total_quota: params.quotaVcpus,
+      total_vcpus: params.quotaVcpus,
+      used_vcpus: params.usedVcpus,
+      required_vcpu: REQUIRED_VCPUS,
+      required_vcpus: REQUIRED_VCPUS,
+
+      // Elastic IP Quotas (pass all aliases: available_eips, total_eip_quota, eip_quota, elastic_ip_quota)
+      available_eips: params.availableEips,
+      available_eip: params.availableEips,
+      total_eip_quota: params.quotaEips,
+      total_eips: params.quotaEips,
+      quota_eips: params.quotaEips,
+      eip_quota: params.quotaEips,
+      elastic_ip_quota: params.quotaEips,
+      used_eips: params.usedEips,
+      elastic_ip_count: params.usedEips,
+      elastic_ips: params.availableEips,
+      required_eips: REQUIRED_SPLUNK_EIPS,
+
+      // Status & Results
+      valid_account: params.isValidAccount,
+      has_required_vcpu: params.hasRequiredVcpu,
+      has_required_eips: params.hasRequiredEips,
+      success: params.isSuccess,
+      status: params.isSuccess ? 'SUCCESS' : 'FAILED',
+      failure_reason: params.failureReason || '',
+
+      // Multi-region breakdown
+      regions_summary: params.regionsSummary || [],
+      allocation_plan: params.allocationPlan || [],
+      timestamp: new Date().toISOString(),
+    };
+
+    console.log(
+      `[VALIDATE-AWS-CRED] Calling log lambda at ${AWS_CRED_VALIDATE_API_URL} (account: ${params.accountId || 'none'}, region: ${params.targetRegion}, vCPUs: ${params.availableVcpus}/${params.quotaVcpus}, EIPs: ${params.availableEips}/${params.quotaEips}, success: ${params.isSuccess})`
+    );
+
+    const upstreamResp = await fetch(AWS_CRED_VALIDATE_API_URL, {
+      method: 'POST',
+      headers: upstreamHeaders,
+      body: JSON.stringify(payload),
+    });
+
+    const upstreamText = await upstreamResp.text();
+    console.log(`[VALIDATE-AWS-CRED] Upstream log lambda response [${upstreamResp.status}]:`, upstreamText);
+    return upstreamResp.ok;
+  } catch (logErr) {
+    console.warn('[VALIDATE-AWS-CRED] Upstream logging failed:', logErr);
+    return false;
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -206,58 +321,14 @@ export async function POST(req: NextRequest) {
 
     // Extract token & resolve user email
     const activeToken = resolveBackendToken(req, body?.token || body?.access_token);
+    const cleanToken = (activeToken || '').replace(/^Bearer\s+/i, '').trim();
 
     let userEmail = body?.user_email || body?.email || '';
     if (!userEmail && activeToken) {
       userEmail = extractEmailFromToken(activeToken);
     }
 
-    // 2. Notify upstream Lambda (Freelab-log) to log to Google Sheet
     let upstreamLogged = false;
-    let upstreamData: any = null;
-    try {
-      const cleanToken = (activeToken || '').replace(/^Bearer\s+/i, '').trim();
-      const upstreamHeaders: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (cleanToken) {
-        upstreamHeaders['Authorization'] = `Bearer ${cleanToken}`;
-        upstreamHeaders['token'] = cleanToken;
-      }
-
-      const claims = decodeJwtPayload(cleanToken);
-      console.log(`[VALIDATE-AWS-CRED] Calling log lambda at ${AWS_CRED_VALIDATE_API_URL} (has token: ${Boolean(cleanToken)}, user: ${userEmail || 'unknown'}, iss: ${claims.iss || 'none'}, exp: ${claims.exp ? new Date(claims.exp * 1000).toISOString() : 'none'})`);
-
-      const upstreamResp = await fetch(AWS_CRED_VALIDATE_API_URL, {
-        method: 'POST',
-        headers: upstreamHeaders,
-        body: JSON.stringify({
-          aws_access_key: trimmedKey,
-          aws_secret_key: trimmedSecret,
-          token: cleanToken,
-          region: targetRegion,
-          reion: targetRegion,
-          user_email: userEmail,
-          email: userEmail,
-          is_admin: isAdmin,
-          mode: isAdmin ? 'admin' : (mode || 'student'),
-          timestamp: new Date().toISOString(),
-        }),
-      });
-      upstreamLogged = upstreamResp.ok;
-      const upstreamText = await upstreamResp.text();
-      console.log(`[VALIDATE-AWS-CRED] Upstream log lambda response [${upstreamResp.status}]:`, upstreamText);
-      try {
-        upstreamData = JSON.parse(upstreamText);
-        if (upstreamData && typeof upstreamData.body === 'string') {
-          upstreamData = JSON.parse(upstreamData.body);
-        }
-      } catch {
-        upstreamData = { raw: upstreamText };
-      }
-    } catch (logErr) {
-      console.warn('[VALIDATE-AWS-CRED] Upstream logging failed:', logErr);
-    }
 
     // 3. Authenticate credentials with AWS STS
     let accountId = '';
@@ -274,6 +345,27 @@ export async function POST(req: NextRequest) {
       accountId = identity.Account || '';
     } catch (stsErr: any) {
       console.warn('[VALIDATE-AWS-CRED] STS verification failed:', stsErr?.message);
+      await callUpstreamLogLambda({
+        trimmedKey,
+        trimmedSecret,
+        cleanToken,
+        userEmail,
+        targetRegion,
+        isAdmin,
+        mode: isAdmin ? 'admin' : (mode || 'student'),
+        accountId: '',
+        availableVcpus: 0,
+        quotaVcpus: 0,
+        usedVcpus: 0,
+        availableEips: 0,
+        quotaEips: 0,
+        usedEips: 0,
+        hasRequiredVcpu: false,
+        hasRequiredEips: false,
+        isValidAccount: false,
+        isSuccess: false,
+        failureReason: 'Invalid AWS Credentials. Account not found or credentials inactive.',
+      });
       return NextResponse.json(
         {
           success: false,
@@ -396,6 +488,29 @@ export async function POST(req: NextRequest) {
       if (isMultiRegion) {
         // Multi-Region Mode: Verify we have enough total EIPs (16) and vCPUs (36)
         if (totalAvailableEips < REQUIRED_MULTI_REGION_EIPS) {
+          upstreamLogged = await callUpstreamLogLambda({
+            trimmedKey,
+            trimmedSecret,
+            cleanToken,
+            userEmail,
+            targetRegion,
+            isAdmin: true,
+            mode: 'admin',
+            accountId,
+            availableVcpus: totalAvailableVcpus,
+            quotaVcpus: totalAvailableVcpus,
+            usedVcpus: 0,
+            availableEips: totalAvailableEips,
+            quotaEips: totalAvailableEips,
+            usedEips: 0,
+            hasRequiredVcpu: totalAvailableVcpus >= REQUIRED_VCPUS,
+            hasRequiredEips: false,
+            isValidAccount: true,
+            isSuccess: false,
+            regionsSummary: allocationPlan,
+            allocationPlan,
+            failureReason: `Insufficient Elastic IP Quota for Multi-Region: All 16 servers require an Elastic IP in multi-region mode, but your AWS account currently has only ${totalAvailableEips} Elastic IPs available across the 10 checked regions (${REQUIRED_MULTI_REGION_EIPS} required).`,
+          });
           return NextResponse.json(
             {
               success: false,
@@ -423,6 +538,28 @@ export async function POST(req: NextRequest) {
         }
 
         const allocatedRegions = allocationPlan.filter((r) => r.allocated_instances > 0);
+        upstreamLogged = await callUpstreamLogLambda({
+          trimmedKey,
+          trimmedSecret,
+          cleanToken,
+          userEmail,
+          targetRegion,
+          isAdmin: true,
+          mode: 'admin',
+          accountId,
+          availableVcpus: totalAvailableVcpus,
+          quotaVcpus: totalAvailableVcpus,
+          usedVcpus: 0,
+          availableEips: totalAvailableEips,
+          quotaEips: totalAvailableEips,
+          usedEips: 0,
+          hasRequiredVcpu: true,
+          hasRequiredEips: true,
+          isValidAccount: true,
+          isSuccess: true,
+          regionsSummary: allocationPlan,
+          allocationPlan,
+        });
         return NextResponse.json(
           {
             success: true,
@@ -453,6 +590,29 @@ export async function POST(req: NextRequest) {
       const primaryRegionCheck =
         regionChecks.find((r) => r.region === singleRegionQualified.region) || regionChecks[0];
 
+      upstreamLogged = await callUpstreamLogLambda({
+        trimmedKey,
+        trimmedSecret,
+        cleanToken,
+        userEmail,
+        targetRegion: singleRegionQualified.region,
+        isAdmin: true,
+        mode: 'admin',
+        accountId,
+        availableVcpus: primaryRegionCheck.available_vcpus,
+        quotaVcpus: primaryRegionCheck.quota_vcpus,
+        usedVcpus: primaryRegionCheck.used_vcpus,
+        availableEips: primaryRegionCheck.available_eips,
+        quotaEips: primaryRegionCheck.quota_eips,
+        usedEips: primaryRegionCheck.used_eips,
+        hasRequiredVcpu: true,
+        hasRequiredEips: true,
+        isValidAccount: true,
+        isSuccess: true,
+        regionsSummary: allocationPlan,
+        allocationPlan,
+      });
+
       return NextResponse.json(
         {
           success: true,
@@ -480,8 +640,30 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 6. Student Mode: Requires at least 36 vCPUs and 9 Elastic IPs in a single region
+    // 8. Student Mode: Requires at least 36 vCPUs and 9 Elastic IPs in a single region
     if (!singleRegionVcpu) {
+      upstreamLogged = await callUpstreamLogLambda({
+        trimmedKey,
+        trimmedSecret,
+        cleanToken,
+        userEmail,
+        targetRegion: highestVcpu.region,
+        isAdmin: false,
+        mode: mode || 'student',
+        accountId,
+        availableVcpus: highestVcpu.available_vcpus,
+        quotaVcpus: highestVcpu.quota_vcpus,
+        usedVcpus: highestVcpu.used_vcpus,
+        availableEips: highestVcpu.available_eips,
+        quotaEips: highestVcpu.quota_eips,
+        usedEips: highestVcpu.used_eips,
+        hasRequiredVcpu: false,
+        hasRequiredEips: highestVcpu.available_eips >= REQUIRED_SPLUNK_EIPS,
+        isValidAccount: true,
+        isSuccess: false,
+        regionsSummary: regionChecks,
+        failureReason: `Insufficient vCPU Quota: Checked all regions, but none currently have at least ${REQUIRED_VCPUS} vCPUs (highest found: ${highestVcpu.available_vcpus} vCPUs in ${highestVcpu.region}).`,
+      });
       return NextResponse.json(
         {
           success: false,
@@ -505,6 +687,28 @@ export async function POST(req: NextRequest) {
     const hasRequiredEips = selectedRegion.available_eips >= REQUIRED_SPLUNK_EIPS;
 
     if (!hasRequiredEips) {
+      upstreamLogged = await callUpstreamLogLambda({
+        trimmedKey,
+        trimmedSecret,
+        cleanToken,
+        userEmail,
+        targetRegion: selectedRegion.region,
+        isAdmin: false,
+        mode: mode || 'student',
+        accountId,
+        availableVcpus: selectedRegion.available_vcpus,
+        quotaVcpus: selectedRegion.quota_vcpus,
+        usedVcpus: selectedRegion.used_vcpus,
+        availableEips: selectedRegion.available_eips,
+        quotaEips: selectedRegion.quota_eips,
+        usedEips: selectedRegion.used_eips,
+        hasRequiredVcpu: true,
+        hasRequiredEips: false,
+        isValidAccount: true,
+        isSuccess: false,
+        regionsSummary: regionChecks,
+        failureReason: `Insufficient Elastic IP Quota: Your AWS account in ${selectedRegion.region} currently has ${selectedRegion.available_eips} Elastic IPs available, but at least ${REQUIRED_SPLUNK_EIPS} Elastic IPs are required.`,
+      });
       return NextResponse.json(
         {
           success: false,
@@ -529,6 +733,28 @@ export async function POST(req: NextRequest) {
     }
 
     // Success for Student
+    upstreamLogged = await callUpstreamLogLambda({
+      trimmedKey,
+      trimmedSecret,
+      cleanToken,
+      userEmail,
+      targetRegion: selectedRegion.region,
+      isAdmin: false,
+      mode: mode || 'student',
+      accountId,
+      availableVcpus: selectedRegion.available_vcpus,
+      quotaVcpus: selectedRegion.quota_vcpus,
+      usedVcpus: selectedRegion.used_vcpus,
+      availableEips: selectedRegion.available_eips,
+      quotaEips: selectedRegion.quota_eips,
+      usedEips: selectedRegion.used_eips,
+      hasRequiredVcpu: true,
+      hasRequiredEips: true,
+      isValidAccount: true,
+      isSuccess: true,
+      regionsSummary: regionChecks,
+    });
+
     return NextResponse.json(
       {
         success: true,
