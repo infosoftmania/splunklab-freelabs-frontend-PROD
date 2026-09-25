@@ -273,14 +273,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
     setSuccessBadge('');
     setCredValidationStatus('idle');
 
-    let storedToken = user.token || '';
-    try {
-      const profRes = await fetch('/api/auth/profile');
-      const profData = await profRes.json();
-      if (profData?.token) {
-        storedToken = profData.token;
-      }
-    } catch {}
+    const storedToken = user.token || '';
 
     try {
       const res = await fetch('/api/validate-aws-cred', {

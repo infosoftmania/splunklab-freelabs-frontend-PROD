@@ -245,16 +245,7 @@ const handleGroupChange = (
     setIsMultiRegionMode(false);
 
     try {
-      let activeToken = token || '';
-      if (!activeToken) {
-        try {
-          const profRes = await fetch('/api/auth/profile');
-          const profData = await profRes.json();
-          if (profData?.token) {
-            activeToken = profData.token;
-          }
-        } catch {}
-      }
+      const activeToken = token || '';
 
       const res = await fetch('/api/validate-aws-cred', {
         method: 'POST',
