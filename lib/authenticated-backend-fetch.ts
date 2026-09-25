@@ -234,10 +234,7 @@ export async function authenticatedBackendFetch(
   const requestTemplate = createRequest(input, options);
   const cookieGetter = getCookieGetter(incomingRequest);
 
-  const accessToken =
-    cookieGetter.get('access_token')?.value ??
-    cookieGetter.get('token')?.value ??
-    null;
+  const accessToken = cookieGetter.get('access_token')?.value ?? null;
 
   const initialResponse = await fetchWithAccessToken(
     requestTemplate,
