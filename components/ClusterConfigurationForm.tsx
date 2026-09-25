@@ -82,11 +82,22 @@ export default function ClusterConfigurationForm({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // User email state (from props or active session)
-  const [userEmail, setUserEmail] = useState<string>(propUserEmail || '');
+  const [userEmail, setUserEmail] = useState<string>(() => {
+    if (propUserEmail) return propUserEmail;
+    if (typeof window !== 'undefined') {
+      return sessionStorage.getItem('freelabs_user_email') || '';
+    }
+    return '';
+  });
 
   useEffect(() => {
     if (propUserEmail) {
       setUserEmail(propUserEmail);
+    } else if (typeof window !== 'undefined') {
+      const savedEmail = sessionStorage.getItem('freelabs_user_email');
+      if (savedEmail) {
+        setUserEmail(savedEmail);
+      }
     }
   }, [propUserEmail]);
 
