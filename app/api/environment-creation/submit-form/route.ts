@@ -393,14 +393,20 @@ export async function POST(req: Request) {
       if (existingCount > 0) {
         return NextResponse.json(
           {
-            success: false,
+            success: true,
             existing_lab: true,
             instance_count: existingCount,
             servers: existingServers,
             lab_id,
-            message: `⚠️ An active lab already exists for this account (${existingCount} servers found for Lab ID: "${lab_id}"). Please terminate your existing lab before creating a new one.`,
+            message: `An active lab already exists for this account (${existingCount} servers found for Lab ID: "${lab_id}").`,
+            data: {
+              status: existingCount >= 16 ? 'COMPLETED' : 'IN_PROGRESS',
+              lab_id,
+              servers: existingServers,
+              instance_count: existingCount,
+            },
           },
-          { status: 409 }
+          { status: 200 }
         );
       }
     } catch (checkErr: any) {

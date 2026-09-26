@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { extractEmailFromToken, normalizeAwsValidationResponse } from '@/lib/aws-validation';
+import { getValidAccessToken, getCoordinatedRefresh } from '@/lib/authenticated-backend-fetch';
 
 export const dynamic = 'force-dynamic';
 
@@ -43,9 +44,10 @@ export async function POST(req: NextRequest) {
     const targetRegion = region || 'us-east-1';
     let isAdmin = Boolean(is_admin === true || mode === 'admin');
 
-    // 2. Resolve token & user email
-    const activeToken = resolveBackendToken(req, body?.token || body?.access_token);
-    const cleanToken = (activeToken || '').replace(/^Bearer\s+/i, '').trim();
+    // 2. Resolve token & user email (with automatic proactive refresh if expired)
+    const rawProvidedToken = resolveBackendToken(req, body?.token || body?.access_token);
+    const { token: validToken, setCookies } = await getValidAccessToken(req, rawProvidedToken);
+    let cleanToken = (validToken || '').replace(/^Bearer\s+/i, '').trim();
 
     // If not explicitly passed as admin, verify admin status using token via verify-admin
     if (!isAdmin && cleanToken) {
@@ -84,7 +86,7 @@ export async function POST(req: NextRequest) {
       upstreamHeaders['token'] = cleanToken;
     }
 
-    const upstreamPayload = {
+    const upstreamPayload: Record<string, any> = {
       ...body,
       aws_access_key: trimmedKey,
       aws_secret_key: trimmedSecret,
@@ -108,13 +110,13 @@ export async function POST(req: NextRequest) {
     );
 
     // 4. Call upstream API
-    const response = await fetch(AWS_CRED_VALIDATE_API_URL, {
+    let response = await fetch(AWS_CRED_VALIDATE_API_URL, {
       method: 'POST',
       headers: upstreamHeaders,
       body: JSON.stringify(upstreamPayload),
     });
 
-    const responseText = await response.text();
+    let responseText = await response.text();
     let rawData: any = null;
 
     try {
@@ -131,6 +133,55 @@ export async function POST(req: NextRequest) {
       rawData = { message: responseText };
     }
 
+    // If upstream indicated token expired/unauthorized, perform refresh using refresh_token and retry
+    const isTokenExpired =
+      response.status === 401 ||
+      (typeof rawData?.message === 'string' &&
+        (rawData.message.toLowerCase().includes('expired') ||
+          rawData.message.toLowerCase().includes('unauthorized') ||
+          rawData.message.toLowerCase().includes('token')));
+
+    if (isTokenExpired) {
+      const refreshToken = req.cookies.get('refresh_token')?.value;
+      const sessionId =
+        req.cookies.get('session_id')?.value ||
+        req.cookies.get('session_token')?.value;
+
+      if (refreshToken && sessionId) {
+        console.log('[VALIDATE-AWS-CRED] Upstream indicated token expired, executing refresh...');
+        const refreshResult = await getCoordinatedRefresh(refreshToken, sessionId);
+        if (refreshResult.accessToken) {
+          cleanToken = refreshResult.accessToken;
+          upstreamHeaders['Authorization'] = `Bearer ${cleanToken}`;
+          upstreamHeaders['token'] = cleanToken;
+          upstreamPayload.token = cleanToken;
+
+          response = await fetch(AWS_CRED_VALIDATE_API_URL, {
+            method: 'POST',
+            headers: upstreamHeaders,
+            body: JSON.stringify(upstreamPayload),
+          });
+
+          responseText = await response.text();
+          try {
+            rawData = responseText ? JSON.parse(responseText) : {};
+            if (rawData && typeof rawData === 'object' && typeof rawData.body === 'string') {
+              try {
+                const inner = JSON.parse(rawData.body);
+                rawData = { ...rawData, ...inner };
+              } catch {}
+            }
+          } catch {
+            rawData = { message: responseText };
+          }
+
+          for (const c of refreshResult.setCookies) {
+            setCookies.push(c);
+          }
+        }
+      }
+    }
+
     // 5. Clean passthrough of upstream API response, preserving admin role
     const responsePayload = {
       ...rawData,
@@ -142,7 +193,11 @@ export async function POST(req: NextRequest) {
       `[VALIDATE-AWS-CRED] Upstream API response [${response.status}], success: ${responsePayload.success}, message: ${responsePayload.message}`
     );
 
-    return NextResponse.json(responsePayload, { status: response.status });
+    const nextResponse = NextResponse.json(responsePayload, { status: response.status });
+    for (const cookie of setCookies) {
+      nextResponse.headers.append('Set-Cookie', cookie);
+    }
+    return nextResponse;
   } catch (error: any) {
     console.error('[VALIDATE-AWS-CRED] Unexpected error calling validation API:', error);
     return NextResponse.json(

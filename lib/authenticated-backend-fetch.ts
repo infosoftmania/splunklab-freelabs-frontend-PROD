@@ -173,7 +173,34 @@ async function refreshAccessToken(
       };
     }
 
-    const accessToken = getCookieValue(setCookies, 'access_token');
+    let accessToken = getCookieValue(setCookies, 'access_token');
+    let responseBody: any = null;
+    try {
+      const responseText = await response.clone().text();
+      responseBody = responseText ? JSON.parse(responseText) : null;
+    } catch {}
+
+    if (!accessToken && responseBody && typeof responseBody === 'object') {
+      accessToken =
+        responseBody.access_token ||
+        responseBody.token ||
+        responseBody.data?.access_token ||
+        null;
+    }
+
+    if (accessToken && !getCookieValue(setCookies, 'access_token')) {
+      setCookies.push(
+        `access_token=${accessToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`
+      );
+    }
+
+    const returnedRefreshToken =
+      getCookieValue(setCookies, 'refresh_token') || responseBody?.refresh_token;
+    if (returnedRefreshToken && !getCookieValue(setCookies, 'refresh_token')) {
+      setCookies.push(
+        `refresh_token=${returnedRefreshToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000`
+      );
+    }
 
     if (!accessToken) {
       return {
@@ -203,7 +230,29 @@ async function refreshAccessToken(
   }
 }
 
-function getCoordinatedRefresh(
+export function decodeJwtPayload(tokenStr: string): Record<string, any> | null {
+  try {
+    const parts = tokenStr.split('.');
+    if (parts.length < 2) return null;
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const jsonStr = Buffer.from(base64, 'base64').toString('utf-8');
+    return JSON.parse(jsonStr);
+  } catch {
+    return null;
+  }
+}
+
+export function isJwtExpired(token?: string, skewSeconds = 30): boolean {
+  if (!token || typeof token !== 'string') return true;
+  const payload = decodeJwtPayload(token);
+  if (!payload || typeof payload.exp !== 'number') {
+    return false;
+  }
+  const now = Math.floor(Date.now() / 1000);
+  return payload.exp <= now + skewSeconds;
+}
+
+export function getCoordinatedRefresh(
   refreshToken: string,
   sessionId: string,
 ): Promise<RefreshResult> {
@@ -224,6 +273,44 @@ function getCoordinatedRefresh(
   });
 
   return refresh;
+}
+
+export async function getValidAccessToken(
+  incomingRequest: RequestLike,
+  fallbackToken?: string
+): Promise<{ token: string | null; setCookies: string[]; refreshed: boolean }> {
+  const cookieGetter = getCookieGetter(incomingRequest);
+  const cookieAccessToken = cookieGetter.get('access_token')?.value;
+  const cookieGoogleToken = cookieGetter.get('google_token')?.value;
+  const candidateToken = cookieAccessToken || fallbackToken || cookieGoogleToken || null;
+
+  // If candidate token is valid and NOT expired, return immediately
+  if (candidateToken && !isJwtExpired(candidateToken)) {
+    return { token: candidateToken, setCookies: [], refreshed: false };
+  }
+
+  // Token is expired or missing: attempt refresh using refresh_token & session_id
+  const refreshToken = cookieGetter.get('refresh_token')?.value;
+  const sessionId =
+    cookieGetter.get('session_id')?.value ||
+    cookieGetter.get('session_token')?.value;
+
+  if (refreshToken && sessionId) {
+    try {
+      const refreshResult = await getCoordinatedRefresh(refreshToken, sessionId);
+      if (refreshResult.accessToken) {
+        return {
+          token: refreshResult.accessToken,
+          setCookies: refreshResult.setCookies,
+          refreshed: true,
+        };
+      }
+    } catch (refreshErr) {
+      console.warn('[AUTH-REFRESH] Auto-refresh failed:', refreshErr);
+    }
+  }
+
+  return { token: candidateToken, setCookies: [], refreshed: false };
 }
 
 export async function authenticatedBackendFetch(

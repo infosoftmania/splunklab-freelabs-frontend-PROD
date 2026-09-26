@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getValidAccessToken, getCoordinatedRefresh } from '@/lib/authenticated-backend-fetch';
 
 export const dynamic = 'force-dynamic';
 
@@ -60,7 +61,9 @@ function resolveBackendToken(req: NextRequest, bodyToken?: string): string {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
-    const token = resolveBackendToken(req, body?.token || body?.access_token);
+    const rawToken = resolveBackendToken(req, body?.token || body?.access_token);
+    const { token: validToken, setCookies } = await getValidAccessToken(req, rawToken);
+    let token = validToken;
 
     if (!token) {
       return NextResponse.json(
@@ -79,13 +82,13 @@ export async function POST(req: NextRequest) {
     };
 
     // Forward to upstream Lambda sending ONLY the token in Authorization header
-    const response = await fetch(ADMIN_VERIFY_API_URL, {
+    let response = await fetch(ADMIN_VERIFY_API_URL, {
       method: 'GET',
       headers,
       cache: 'no-store',
     });
 
-    const responseText = await response.text();
+    let responseText = await response.text();
     let data: any = {};
     try {
       data = JSON.parse(responseText);
@@ -96,14 +99,65 @@ export async function POST(req: NextRequest) {
       data = { raw: responseText };
     }
 
+    // If token expired/unauthorized, attempt refresh and retry
+    const isTokenExpired =
+      response.status === 401 ||
+      (typeof data?.message === 'string' &&
+        (data.message.toLowerCase().includes('expired') ||
+          data.message.toLowerCase().includes('unauthorized') ||
+          data.message.toLowerCase().includes('token')));
+
+    if (isTokenExpired) {
+      const refreshToken = req.cookies.get('refresh_token')?.value;
+      const sessionId =
+        req.cookies.get('session_id')?.value ||
+        req.cookies.get('session_token')?.value;
+
+      if (refreshToken && sessionId) {
+        console.log('[VERIFY-ADMIN] Upstream token expired, attempting refresh...');
+        const refreshResult = await getCoordinatedRefresh(refreshToken, sessionId);
+        if (refreshResult.accessToken) {
+          token = refreshResult.accessToken;
+          headers['Authorization'] = `Bearer ${token}`;
+
+          response = await fetch(ADMIN_VERIFY_API_URL, {
+            method: 'GET',
+            headers,
+            cache: 'no-store',
+          });
+
+          responseText = await response.text();
+          try {
+            data = JSON.parse(responseText);
+            if (data && typeof data.body === 'string') {
+              data = JSON.parse(data.body);
+            }
+          } catch {
+            data = { raw: responseText };
+          }
+
+          for (const c of refreshResult.setCookies) {
+            setCookies.push(c);
+          }
+        }
+      }
+    }
+
     const isAdmin = Boolean(data?.is_admin === true || data?.isAdmin === true);
 
-    return NextResponse.json({
+    const nextResponse = NextResponse.json({
       success: true,
       is_admin: isAdmin,
       email: data?.email || '',
+      token,
       data,
     });
+
+    for (const cookie of setCookies) {
+      nextResponse.headers.append('Set-Cookie', cookie);
+    }
+
+    return nextResponse;
   } catch (error: any) {
     console.error('[VERIFY-ADMIN] Error verifying admin:', error);
     return NextResponse.json(

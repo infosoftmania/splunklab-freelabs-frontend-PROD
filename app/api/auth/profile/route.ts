@@ -1,27 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getValidAccessToken, decodeJwtPayload } from '@/lib/authenticated-backend-fetch';
 
 export const dynamic = 'force-dynamic';
 
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
-  try {
-    const parts = token.split('.');
-    if (parts.length < 2) return null;
-    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-    const jsonStr = Buffer.from(base64, 'base64').toString('utf-8');
-    return JSON.parse(jsonStr);
-  } catch {
-    return null;
-  }
-}
-
 export async function GET(request: NextRequest) {
   try {
-    const accessToken = request.cookies.get('access_token')?.value;
-    const googleToken = request.cookies.get('google_token')?.value;
-    const activeToken = accessToken || googleToken;
+    const { token: activeToken, setCookies, refreshed } = await getValidAccessToken(request);
 
     if (!activeToken) {
-      return NextResponse.json({ authenticated: false }, { status: 200 });
+      const res = NextResponse.json({ authenticated: false }, { status: 200 });
+      for (const cookie of setCookies) {
+        res.headers.append('Set-Cookie', cookie);
+      }
+      return res;
     }
 
     const decoded = decodeJwtPayload(activeToken) || {};
@@ -32,12 +23,18 @@ export async function GET(request: NextRequest) {
       ...decoded,
     };
 
-    return NextResponse.json(
-      { authenticated: true, user, token: activeToken },
-      { status: 200 },
+    const res = NextResponse.json(
+      { authenticated: true, user, token: activeToken, refreshed },
+      { status: 200 }
     );
+
+    for (const cookie of setCookies) {
+      res.headers.append('Set-Cookie', cookie);
+    }
+
+    return res;
   } catch (error) {
-    console.error('Profile fetch error:', error);
+    console.error('[PROFILE] Fetch error:', error);
     return NextResponse.json({ authenticated: false }, { status: 200 });
   }
 }
