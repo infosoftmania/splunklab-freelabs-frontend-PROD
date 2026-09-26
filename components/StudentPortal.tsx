@@ -52,6 +52,13 @@ export default function StudentPortal({ user, onLogout }: Props) {
   const [successBadge, setSuccessBadge] = useState('');
   const [quotaDetails, setQuotaDetails] = useState<QuotaDetails | null>(null);
   const [eipDetails, setEipDetails] = useState<{ available_eips?: number; required_eips?: number; region?: string; total_quota?: number } | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = (key: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
 
   // Step 2: Unlocked Details (Dynamic single region with >= 36 vCPUs)
   const [targetRegion, setTargetRegion] = useState('us-east-1');
@@ -291,7 +298,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
         setProvisionedServers(null);
         setSetupState('idle');
         setLiveStatusText('');
-        setErrorMessage('No active lab servers found. Click Launch FreeLabs Environment to start.');
+        setErrorMessage('No active lab servers found. Click Launch Soft Mania AWS Labs Environment to start.');
       }
     } catch (err: unknown) {
       setErrorMessage(err instanceof Error ? err.message : 'Unable to load lab status.');
@@ -441,7 +448,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
   const handleLaunchLab = async (e?: React.FormEvent | React.MouseEvent) => {
     e?.preventDefault();
     if (!awsAccessKey.trim() || !awsSecretKey.trim()) {
-      setErrorMessage('Please enter and verify your AWS credentials before launching FreeLabs.');
+      setErrorMessage('Please enter and verify your AWS credentials before launching Soft Mania AWS Labs.');
       setCredValidationStatus('idle');
       return;
     }
@@ -485,8 +492,40 @@ export default function StudentPortal({ user, onLogout }: Props) {
       });
 
       const data = await res.json();
+      const servers = (data.data?.servers || data.servers) as Record<string, StoredLabServer> | undefined;
+      const returnedLabId = data.lab_id || labId;
+
+      // Handle existing lab detected (data.existing_lab, status 409, or message text)
+      if (
+        data.existing_lab ||
+        res.status === 409 ||
+        (typeof data.message === 'string' && data.message.includes('active lab already exists'))
+      ) {
+        if (returnedLabId) {
+          setActiveLabId(returnedLabId);
+          writeLabId(returnedLabId, user.email);
+        }
+        setErrorMessage('');
+
+        const serverCount = servers && typeof servers === 'object' ? Object.keys(servers).length : 0;
+        const readyWithIps = servers && typeof servers === 'object'
+          ? Object.values(servers).filter((s) => s.public_ip && s.public_ip !== 'N/A').length
+          : 0;
+
+        if (servers && serverCount >= 16 && readyWithIps >= 16) {
+          stopAllIntervals();
+          setProvisionedServers(servers);
+          setSetupState('completed');
+          setIsSubmitting(false);
+          return;
+        } else {
+          setSetupState('in_progress');
+          setLiveStatusText('Setting up your lab environment, please wait...');
+          return;
+        }
+      }
+
       if (data.status === 'IN_PROGRESS' || res.status === 200) {
-        const servers = (data.data?.servers || data.servers) as Record<string, StoredLabServer> | undefined;
         if (servers && typeof servers === 'object' && Object.keys(servers).length >= 16) {
           stopAllIntervals();
           setProvisionedServers(servers);
@@ -610,6 +649,14 @@ export default function StudentPortal({ user, onLogout }: Props) {
         setSetupState('idle');
         setActiveLabId(null);
         removeLabId(user.email);
+        if (typeof window !== 'undefined') {
+          const key = targetLabId
+            ? `splunklab_cluster_config_build_${targetLabId}`
+            : (user.email
+            ? `splunklab_cluster_config_build_${user.email.replace(/[^a-zA-Z0-9_-]/g, '_')}`
+            : 'splunklab_cluster_config_build_default');
+          localStorage.removeItem(key);
+        }
         setIsClusterConfigOpen(false);
         setIsDestroyModalOpen(false);
         setDestroyConfirmChecked(false);
@@ -639,7 +686,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
           <div className="flex items-center gap-2.5">
             <span className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white text-sm">🎓</span>
             <div>
-              <p className="text-sm font-bold text-gray-900 leading-none">SoftMania FreeLabs</p>
+              <p className="text-sm font-bold text-gray-900 leading-none">Soft Mania AWS Labs</p>
               <p className="text-xs text-gray-500 leading-none mt-0.5">{user.email}</p>
             </div>
           </div>
@@ -669,6 +716,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
           onClose={() => setIsClusterConfigOpen(false)}
           provisionedServers={provisionedServers}
           userEmail={user.email}
+          labId={activeLabId}
         />
       )}
 
@@ -799,7 +847,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
                 <strong className="text-red-900 bg-red-100 px-1 py-0.5 rounded">{quotaDetails?.available_vcpus ?? 0} vCPUs</strong> available.
               </p>
               <p className="text-xs text-red-800 font-semibold mt-2">
-                ⚠️ You need at least <strong>36 vCPUs</strong> in a single region to launch FreeLabs.
+                ⚠️ You need at least <strong>36 vCPUs</strong> in a single region to launch Soft Mania AWS Labs.
               </p>
               <div className="mt-3 pt-2.5 border-t border-red-200 text-[11px] text-red-700 space-y-1">
                 <p className="font-bold text-red-900">How to increase your quota:</p>
@@ -829,7 +877,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
             <strong className="text-amber-950 bg-amber-100 px-1 py-0.5 rounded">{eipDetails?.available_eips ?? 0} Elastic IPs</strong> available.
           </p>
           <p className="text-xs text-amber-900 font-semibold mt-2">
-            ⚠️ FreeLabs requires at least <strong>{eipDetails?.required_eips ?? 9} Elastic IPs</strong> in this region so that all 9 Splunk servers retain static public IPs across Stop &amp; Start cycles.
+            ⚠️ Soft Mania AWS Labs requires at least <strong>{eipDetails?.required_eips ?? 9} Elastic IPs</strong> in this region so that all 9 Splunk servers retain static public IPs across Stop &amp; Start cycles.
           </p>
           <div className="mt-3 pt-2.5 border-t border-amber-200 text-[11px] text-amber-800 space-y-1">
             <p className="font-bold text-amber-950">How to request an Elastic IP increase (Free &amp; Instant):</p>
@@ -1011,7 +1059,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
                 <span>Deploying 16 Servers in us-east-1...</span>
               </>
             ) : (
-              <span>🚀 Launch FreeLabs Environment</span>
+              <span>🚀 Launch Soft Mania AWS Labs Environment</span>
             )}
           </button>
         </div>
@@ -1052,7 +1100,7 @@ export default function StudentPortal({ user, onLogout }: Props) {
               <div className="bg-white rounded-xl shadow-sm border border-green-200 overflow-hidden">
                 <div className="px-6 py-4 border-b border-green-100 bg-green-50/60 flex items-center justify-between">
                   <span className="text-sm font-bold text-green-700">
-                    ✅ All 16 Servers Created in us-east-1!
+                    ✅ All 16 Servers Ready in {targetRegion}!
                   </span>
                   <button
                     type="button"
@@ -1063,30 +1111,88 @@ export default function StudentPortal({ user, onLogout }: Props) {
                   </button>
                 </div>
                 <div className="p-6">
-                  <div className="max-h-96 overflow-y-auto space-y-2 bg-gray-50 p-3.5 rounded-lg border text-xs">
-                    {Object.entries(provisionedServers).map(([sName, sData]) => (
-                      <div key={sName} className="flex justify-between items-center py-2 px-3 bg-white rounded-lg border border-gray-200 shadow-2xs hover:border-blue-300 transition-colors">
-                        <span className="font-semibold text-gray-800">{sName}</span>
-                        <div className="flex items-center gap-3">
-                          <span className="text-right text-gray-600 font-mono">
-                            <span className="block text-blue-700 font-medium">Public: {sData.public_ip || 'N/A'}</span>
-                            <span className="block text-[11px] text-gray-500">Private: {sData.private_ip || 'N/A'}</span>
-                          </span>
-                          {sData.public_ip && (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                navigator.clipboard.writeText(sData.public_ip || '');
-                              }}
-                              className="text-[11px] px-2 py-1 rounded border bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 font-medium transition"
-                              title="Copy Public IP"
-                            >
-                              Copy
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                  <div className="max-h-96 overflow-y-auto overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-2xs">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-gray-600 font-semibold text-[11px] uppercase tracking-wider">
+                        <tr>
+                          <th className="py-2.5 px-4 bg-gray-50/95 backdrop-blur-xs">Server</th>
+                          <th className="py-2.5 px-4 bg-gray-50/95 backdrop-blur-xs">Public IP</th>
+                          <th className="py-2.5 px-4 bg-gray-50/95 backdrop-blur-xs">Private IP</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-100">
+                        {Object.entries(provisionedServers).map(([sName, sData]) => {
+                          const pubIp = sData.public_ip && sData.public_ip !== 'N/A' ? sData.public_ip : '';
+                          const privIp = sData.private_ip && sData.private_ip !== 'N/A' ? sData.private_ip : '';
+
+                          return (
+                            <tr key={sName} className="hover:bg-blue-50/40 transition-colors">
+                              {/* Server Name & Region */}
+                              <td className="py-2.5 px-4 whitespace-nowrap">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-gray-900">{sName}</span>
+                                  {sData.region && (
+                                    <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 font-mono">
+                                      {sData.region}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Public IP */}
+                              <td className="py-2.5 px-4 whitespace-nowrap">
+                                <div className="inline-flex items-center justify-between w-48 bg-blue-50/70 border border-blue-200/80 px-2.5 py-1 rounded-md">
+                                  <code className="text-[11px] font-mono font-bold text-blue-700">
+                                    {pubIp || 'N/A'}
+                                  </code>
+                                  {pubIp ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopy(`${sName}:pub`, pubIp)}
+                                      className={`w-14 text-center text-[10px] py-0.5 rounded font-medium transition border ${
+                                        copiedKey === `${sName}:pub`
+                                          ? 'bg-green-600 text-white border-green-600 font-bold'
+                                          : 'bg-white hover:bg-blue-100 text-blue-800 border-blue-300 shadow-2xs'
+                                      }`}
+                                      title="Copy Public IP"
+                                    >
+                                      {copiedKey === `${sName}:pub` ? '✓ Copied' : 'Copy'}
+                                    </button>
+                                  ) : (
+                                    <span className="w-14" />
+                                  )}
+                                </div>
+                              </td>
+
+                              {/* Private IP */}
+                              <td className="py-2.5 px-4 whitespace-nowrap">
+                                <div className="inline-flex items-center justify-between w-48 bg-gray-50 border border-gray-200 px-2.5 py-1 rounded-md">
+                                  <code className="text-[11px] font-mono font-medium text-gray-800">
+                                    {privIp || 'N/A'}
+                                  </code>
+                                  {privIp ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopy(`${sName}:priv`, privIp)}
+                                      className={`w-14 text-center text-[10px] py-0.5 rounded font-medium transition border ${
+                                        copiedKey === `${sName}:priv`
+                                          ? 'bg-green-600 text-white border-green-600 font-bold'
+                                          : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 shadow-2xs'
+                                      }`}
+                                      title="Copy Private IP"
+                                    >
+                                      {copiedKey === `${sName}:priv` ? '✓ Copied' : 'Copy'}
+                                    </button>
+                                  ) : (
+                                    <span className="w-14" />
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
 
                   {/* Terminate Button */}

@@ -62,6 +62,25 @@ export default function HomePage() {
     };
   }, []);
 
+  // Background token refresh timer every 10 minutes to prevent token expiration
+  useEffect(() => {
+    if (!user) return;
+
+    const refreshInterval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/auth/refresh', { method: 'POST' });
+        const data = await res.json();
+        if (data.success && data.token) {
+          setUser((prev) => (prev ? { ...prev, token: data.token } : null));
+        }
+      } catch (err) {
+        console.warn('[AUTH] Background token refresh error:', err);
+      }
+    }, 10 * 60 * 1000);
+
+    return () => clearInterval(refreshInterval);
+  }, [user?.email]);
+
   const handleLogout = async () => {
     try {
       await fetch('/api/logout', { method: 'POST' });
@@ -81,7 +100,7 @@ export default function HomePage() {
             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
             <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
           </svg>
-          <span>Loading SoftMania FreeLabs...</span>
+          <span>Loading Soft Mania AWS Labs...</span>
         </div>
       </div>
     );

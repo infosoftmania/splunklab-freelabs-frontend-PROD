@@ -22,6 +22,7 @@ type Props = {
   userEmail?: string;
   hideAuth?: boolean;
   onDestroyLab?: () => void;
+  labId?: string | null;
 };
 
 type ProgressStep =
@@ -35,9 +36,22 @@ type ProgressStep =
   | 'completed'
   | 'failed';
 
+type SavedClusterBuild = {
+  build_id: string;
+};
+
 const IP_REGEX =
   /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
 
+function getBuildStorageKey(labId?: string | null, userEmail?: string): string {
+  if (labId && labId.trim()) {
+    return `splunklab_cluster_config_build_${labId.trim()}`;
+  }
+  if (userEmail && userEmail.trim()) {
+    return `splunklab_cluster_config_build_${userEmail.trim().replace(/[^a-zA-Z0-9_-]/g, '_')}`;
+  }
+  return 'splunklab_cluster_config_build_default';
+}
 
 export default function ClusterConfigurationForm({
   onClose,
@@ -45,10 +59,12 @@ export default function ClusterConfigurationForm({
   userEmail: propUserEmail,
   hideAuth,
   onDestroyLab,
+  labId,
 }: Props) {
   const [publicIps, setPublicIps] = useState<Record<ServerName, string>>(() =>
     Object.fromEntries(SERVER_NAMES.map((name) => [name, ''])) as Record<ServerName, string>
   );
+  const isTriggeringRef = useRef(false);
 
   useEffect(() => {
     if (!provisionedServers) return;
@@ -150,7 +166,147 @@ export default function ClusterConfigurationForm({
     }
   };
 
+  const saveBuildToLocalStorage = (buildId: string) => {
+    try {
+      if (typeof window === 'undefined' || !buildId) return;
+      const key = getBuildStorageKey(labId, userEmail);
+      localStorage.setItem(key, JSON.stringify({ build_id: buildId }));
+    } catch (err) {
+      console.warn('Failed to save cluster config build to localStorage:', err);
+    }
+  };
+
+  const clearBuildFromLocalStorage = () => {
+    try {
+      if (typeof window === 'undefined') return;
+      const key = getBuildStorageKey(labId, userEmail);
+      localStorage.removeItem(key);
+    } catch {}
+  };
+
+  const monitorCodeBuildStatus = async (
+    buildId: string,
+    startTimeOverride?: number
+  ) => {
+    setProgressStep('configuring');
+    setWorking(true);
+    let completed = false;
+    const startTime = startTimeOverride || Date.now();
+    const MAX_ATTEMPTS = 45; // 45 attempts * 60s = 45 minutes
+
+    // If starting fresh, wait 15s before first check; if restoring from page refresh, check immediately!
+    if (!startTimeOverride) {
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+    }
+
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
+      const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
+      const elapsedMin = Math.floor(elapsedSec / 60);
+      const secRemainder = elapsedSec % 60;
+      const timeFormatted = elapsedMin > 0 ? `${elapsedMin}m ${secRemainder}s` : `${elapsedSec}s`;
+
+      try {
+        const statusUrl = buildId
+          ? `/api/cluster-config/status?build_id=${encodeURIComponent(buildId)}`
+          : `/api/cluster-config/status${userEmail ? `?email=${encodeURIComponent(userEmail)}` : ''}`;
+
+        const clusterStatusRes = await fetch(statusUrl, {
+          headers: userEmail ? { 'x-user-email': userEmail } : {},
+          cache: 'no-store',
+        });
+        const clusterStatusData = await clusterStatusRes.json();
+
+        if (clusterStatusRes.status === 404 || clusterStatusData?.error?.includes('not found')) {
+          clearBuildFromLocalStorage();
+          throw new Error('Build identifier not found or expired.');
+        }
+
+        if (clusterStatusRes.ok) {
+          const rawStatus = (clusterStatusData.status || clusterStatusData.Status || '').toUpperCase();
+          const phase = clusterStatusData.current_phase || clusterStatusData.phase || '';
+
+          if (rawStatus) {
+            setStatusMessage(
+              `Cluster configuration running (${timeFormatted}) — Status: ${rawStatus} (Phase: ${phase || 'IN_PROGRESS'}). Next check in 1 min...`
+            );
+          }
+
+          if (rawStatus === 'SUCCEEDED' || rawStatus === 'COMPLETED' || rawStatus === 'SUCCESS') {
+            completed = true;
+            saveBuildToLocalStorage(buildId);
+            break;
+          }
+          if (rawStatus === 'FAILED' || rawStatus === 'ERROR' || rawStatus === 'FAULT' || rawStatus === 'STOPPED') {
+            saveBuildToLocalStorage(buildId);
+            throw new Error(`Cluster configuration failed with status: ${rawStatus}. Check CodeBuild logs for details.`);
+          }
+        }
+      } catch (err) {
+        if (
+          err instanceof Error &&
+          (err.message.includes('Cluster configuration failed') || err.message.includes('not found or expired'))
+        ) {
+          throw err;
+        }
+      }
+
+      if (attempt === MAX_ATTEMPTS - 1 && !completed) {
+        throw new Error('Timed out waiting for cluster configuration to finish (45 minutes exceeded).');
+      }
+
+      // Wait 60s before next status API call, while updating UI clock every 5s
+      for (let waitTick = 0; waitTick < 12; waitTick += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+        const currentElapsedSec = Math.floor((Date.now() - startTime) / 1000);
+        const curMin = Math.floor(currentElapsedSec / 60);
+        const curSec = currentElapsedSec % 60;
+        const curFormatted = curMin > 0 ? `${curMin}m ${curSec}s` : `${currentElapsedSec}s`;
+        setStatusMessage((prev) => {
+          if (!prev || !prev.includes('Cluster configuration running')) return prev;
+          return prev.replace(/\([^)]*\)/, `(${curFormatted})`);
+        });
+      }
+    }
+
+    const totalElapsedSec = Math.floor((Date.now() - startTime) / 1000);
+    const totalMin = Math.floor(totalElapsedSec / 60);
+    const totalSecRemainder = totalElapsedSec % 60;
+    const totalTimeFormatted = totalMin > 0 ? `${totalMin}m ${totalSecRemainder}s` : `${totalElapsedSec}s`;
+
+    setProgressStep('completed');
+    setStatusMessage('');
+    setSuccessMessage(`Cluster configuration completed successfully in ${totalTimeFormatted}! All 9 servers configured.`);
+    onClose();
+  };
+
+  // Restore build state on mount / page refresh
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const key = getBuildStorageKey(labId, userEmail);
+    const savedRaw = localStorage.getItem(key);
+    if (!savedRaw) return;
+
+    try {
+      const saved: SavedClusterBuild = JSON.parse(savedRaw);
+      if (!saved.build_id) return;
+
+      monitorCodeBuildStatus(saved.build_id, Date.now()).catch((err) => {
+        if (err instanceof Error && err.message.includes('not found')) {
+          clearBuildFromLocalStorage();
+        } else {
+          setProgressStep('failed');
+          setStatusMessage('');
+          setErrorMessage(err instanceof Error ? err.message : 'Cluster configuration check failed.');
+        }
+      });
+    } catch (err) {
+      console.warn('Failed to parse saved cluster config build:', err);
+    }
+  }, [labId, userEmail]);
+
   const proceed = async () => {
+    if (working || isTriggeringRef.current) return;
+    isTriggeringRef.current = true;
     setWorking(true);
     setErrorMessage('');
     setSuccessMessage('');
@@ -268,7 +424,7 @@ export default function ClusterConfigurationForm({
 
       // 5. Trigger Cluster Configuration via FreeLabs Lambda
       setProgressStep('triggering');
-      setStatusMessage('Triggering Cluster Configuration via FreeLabs Lambda...');
+      setStatusMessage('Triggering Cluster Configuration via Soft Mania AWS Labs Lambda...');
 
       const planStartDate = new Date().toISOString();
 
@@ -311,90 +467,19 @@ export default function ClusterConfigurationForm({
       }
 
       const buildId = triggerData.build_id;
-
-      // 6. Poll Cluster Configuration Status (1 min interval, up to 45 minutes)
-      setProgressStep('configuring');
-      setStatusMessage('Cluster configuration initiated. Monitoring CodeBuild execution...');
-
-      let completed = false;
-      const startTime = Date.now();
-      const MAX_ATTEMPTS = 45; // 45 attempts * 60s = 45 minutes
-
-      // Quick initial check at 15s to capture initial build phase
-      await new Promise((resolve) => setTimeout(resolve, 15000));
-
-      for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt += 1) {
-        const elapsedSec = Math.floor((Date.now() - startTime) / 1000);
-        const elapsedMin = Math.floor(elapsedSec / 60);
-        const secRemainder = elapsedSec % 60;
-        const timeFormatted = elapsedMin > 0 ? `${elapsedMin}m ${secRemainder}s` : `${elapsedSec}s`;
-
-        try {
-          const statusUrl = buildId
-            ? `/api/cluster-config/status?build_id=${encodeURIComponent(buildId)}`
-            : `/api/cluster-config/status${userEmail ? `?email=${encodeURIComponent(userEmail)}` : ''}`;
-
-          const clusterStatusRes = await fetch(statusUrl, {
-            headers: userEmail ? { 'x-user-email': userEmail } : {},
-            cache: 'no-store',
-          });
-          const clusterStatusData = await clusterStatusRes.json();
-          if (clusterStatusRes.ok) {
-            const rawStatus = (clusterStatusData.status || clusterStatusData.Status || '').toUpperCase();
-            const phase = clusterStatusData.current_phase || clusterStatusData.phase || '';
-
-            if (rawStatus) {
-              setStatusMessage(
-                `Cluster configuration running (${timeFormatted}) — Status: ${rawStatus} (Phase: ${phase || 'IN_PROGRESS'}). Next check in 1 min...`
-              );
-            }
-
-            if (rawStatus === 'SUCCEEDED' || rawStatus === 'COMPLETED' || rawStatus === 'SUCCESS') {
-              completed = true;
-              break;
-            }
-            if (rawStatus === 'FAILED' || rawStatus === 'ERROR' || rawStatus === 'FAULT' || rawStatus === 'STOPPED') {
-              throw new Error(`Cluster configuration failed with status: ${rawStatus}. Check CodeBuild logs for details.`);
-            }
-          }
-        } catch (err) {
-          if (err instanceof Error && err.message.includes('Cluster configuration failed')) {
-            throw err;
-          }
-        }
-
-        if (attempt === MAX_ATTEMPTS - 1 && !completed) {
-          throw new Error('Timed out waiting for cluster configuration to finish (45 minutes exceeded).');
-        }
-
-        // Wait 60s before next status API call, while updating UI clock every 5s
-        for (let waitTick = 0; waitTick < 12; waitTick += 1) {
-          await new Promise((resolve) => setTimeout(resolve, 5000));
-          const currentElapsedSec = Math.floor((Date.now() - startTime) / 1000);
-          const curMin = Math.floor(currentElapsedSec / 60);
-          const curSec = currentElapsedSec % 60;
-          const curFormatted = curMin > 0 ? `${curMin}m ${curSec}s` : `${currentElapsedSec}s`;
-          setStatusMessage((prev) => {
-            if (!prev || !prev.includes('Cluster configuration running')) return prev;
-            return prev.replace(/\([^)]*\)/, `(${curFormatted})`);
-          });
-        }
+      if (buildId) {
+        saveBuildToLocalStorage(buildId);
       }
 
-      const totalElapsedSec = Math.floor((Date.now() - startTime) / 1000);
-      const totalMin = Math.floor(totalElapsedSec / 60);
-      const totalSecRemainder = totalElapsedSec % 60;
-      const totalTimeFormatted = totalMin > 0 ? `${totalMin}m ${totalSecRemainder}s` : `${totalElapsedSec}s`;
-
-      setProgressStep('completed');
-      setStatusMessage('');
-      setSuccessMessage(`Cluster configuration completed successfully in ${totalTimeFormatted}! All 9 servers configured.`);
+      // 6. Monitor CodeBuild execution status
+      await monitorCodeBuildStatus(buildId);
     } catch (error) {
       setProgressStep('failed');
       setStatusMessage('');
       setErrorMessage(error instanceof Error ? error.message : 'Cluster configuration encountered an error.');
     } finally {
       setWorking(false);
+      isTriggeringRef.current = false;
     }
   };
 

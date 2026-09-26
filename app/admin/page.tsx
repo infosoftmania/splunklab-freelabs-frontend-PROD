@@ -61,6 +61,25 @@ export default function AdminPage() {
     };
   }, []);
 
+  // Background token refresh timer every 10 minutes to prevent token expiration
+  useEffect(() => {
+    if (!user) return;
+
+    const refreshInterval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/auth/refresh', { method: 'POST' });
+        const data = await res.json();
+        if (data.success && data.token) {
+          setUser((prev) => (prev ? { ...prev, token: data.token } : null));
+        }
+      } catch (err) {
+        console.warn('[ADMIN] Background token refresh error:', err);
+      }
+    }, 10 * 60 * 1000);
+
+    return () => clearInterval(refreshInterval);
+  }, [user?.email]);
+
   const handleLogout = async () => {
     try {
       await fetch('/api/logout', { method: 'POST' });
@@ -94,7 +113,7 @@ export default function AdminPage() {
           <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-100 text-purple-800 text-xs font-bold rounded-full uppercase tracking-wider mb-2">
             👑 Admin Access Required
           </span>
-          <p className="text-xs text-gray-500">Sign in with an authorized Google account to access the Admin Console.</p>
+          <p className="text-xs text-gray-500">Sign in with an authorized Google account to access Soft Mania AWS Labs Admin Console.</p>
         </div>
         <GoogleSignInCard onLoginSuccess={handleLoginSuccess} />
       </div>
@@ -147,8 +166,8 @@ export default function AdminPage() {
           <div className="flex items-center gap-2.5">
             <span className="w-8 h-8 bg-purple-600 rounded-lg flex items-center justify-center text-white text-sm">👑</span>
             <div>
-              <p className="text-sm font-bold text-gray-900 leading-none">Admin Console</p>
-              <p className="text-xs text-gray-500 leading-none mt-0.5">{user.email}</p>
+              <p className="text-sm font-bold text-gray-900 leading-none">Soft Mania AWS Labs</p>
+              <p className="text-xs text-purple-700 font-semibold leading-none mt-1">Admin Console • {user.email}</p>
             </div>
           </div>
           <div className="flex items-center gap-2">

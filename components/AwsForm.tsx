@@ -60,8 +60,54 @@ export default function AwsForm({ userEmail = '', userName = '', token = '' }: A
   const [highlightedIndex, setHighlightedIndex] = useState<number | null>(null);
   const keyPairDropdownRef = useRef<HTMLDivElement | null>(null);
 
+  const [vpcMessage, setVpcMessage] = useState('');
+  const [vpcChecking, setVpcChecking] = useState(false);
+  const [vpcAllowed, setVpcAllowed] = useState<boolean | null>(null);
+  type VpcCheckStatus = 'idle' | 'loading' | 'success' | 'error';
+
+  const [vpcStatus, setVpcStatus] = useState<VpcCheckStatus>('idle');
+
+  // Multi-server provisioning states
+  const [setupState, setSetupState] = useState<'idle' | 'in_progress' | 'completed' | 'error'>('idle');
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [liveStatusText, setLiveStatusText] = useState('');
+  const [activeLabId, setActiveLabId] = useState<string | null>(null);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
+
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  const [provisionedServers, setProvisionedServers] = useState<Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string }> | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = (key: string, text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
+  const [isDestroyModalOpen, setIsDestroyModalOpen] = useState(false);
+  const [destroyConfirmChecked, setDestroyConfirmChecked] = useState(false);
+  const [terminateLoading, setTerminateLoading] = useState(false);
+  const [terminateMessage, setTerminateMessage] = useState('');
+
+  const [formData, setFormData] = useState<AdminFormData>(() => ({
+    aws_access_key: '',
+    aws_secret_key: '',
+    region: '',
+    key_pair_name: '',
+    user_email: userEmail,
+    user_name: userName,
+    codebuild_projects: ['project 5'] as string[],
+  }));
+  const codebuildGroupOptions = Object.entries(environments).map(
+    ([key, value]) => ({
+      label: value.label,
+      value: key,
+    })
+  );
+
   const filteredKeyPairs = keyPairsList.filter((kp) =>
-    kp.toLowerCase().includes(formData.key_pair_name.toLowerCase().trim())
+    kp.toLowerCase().includes((formData.key_pair_name || '').toLowerCase().trim())
   );
 
   useEffect(() => {
@@ -118,46 +164,6 @@ export default function AwsForm({ userEmail = '', userName = '', token = '' }: A
       }
     }
   };
-
-  const [vpcMessage, setVpcMessage] = useState('');
-  const [vpcChecking, setVpcChecking] = useState(false);
-  const [vpcAllowed, setVpcAllowed] = useState<boolean | null>(null);
-  type VpcCheckStatus = 'idle' | 'loading' | 'success' | 'error';
-
-  const [vpcStatus, setVpcStatus] = useState<VpcCheckStatus>('idle');
-
-  // Multi-server provisioning states
-  const [setupState, setSetupState] = useState<'idle' | 'in_progress' | 'completed' | 'error'>('idle');
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
-  const [liveStatusText, setLiveStatusText] = useState('');
-  const [activeLabId, setActiveLabId] = useState<string | null>(null);
-  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
-
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
-
-  const [provisionedServers, setProvisionedServers] = useState<Record<string, { public_ip?: string; private_ip?: string; region?: string; instance_type?: string }> | null>(null);
-  const [copiedKey, setCopiedKey] = useState<string | null>(null);
-  const [isDestroyModalOpen, setIsDestroyModalOpen] = useState(false);
-  const [destroyConfirmChecked, setDestroyConfirmChecked] = useState(false);
-  const [terminateLoading, setTerminateLoading] = useState(false);
-  const [terminateMessage, setTerminateMessage] = useState('');
-
-  const [formData, setFormData] = useState<AdminFormData>(() => ({
-    aws_access_key: '',
-    aws_secret_key: '',
-    region: '',
-    key_pair_name: '',
-    user_email: userEmail,
-    user_name: userName,
-    codebuild_projects: ['project 5'] as string[],
-  }));
-  const codebuildGroupOptions = Object.entries(environments).map(
-    ([key, value]) => ({
-      label: value.label,
-      value: key,
-    })
-  );
 
   useEffect(() => {
     const email = (formData.user_email || userEmail).trim();
@@ -569,10 +575,42 @@ const handleGroupChange = (
       });
 
       const data = await res.json();
+      const servers = (data.data?.servers || data.servers) as Record<string, any> | undefined;
+      const returnedLabId = data.lab_id || labId;
+
+      // Handle existing lab detected (data.existing_lab, status 409, or message text)
+      if (
+        data.existing_lab ||
+        res.status === 409 ||
+        (typeof data.message === 'string' && data.message.includes('active lab already exists'))
+      ) {
+        if (returnedLabId) {
+          setActiveLabId(returnedLabId);
+          writeLabId(returnedLabId, formData.user_email || userEmail);
+        }
+        setSuccessMessage('');
+
+        const serverCount = servers && typeof servers === 'object' ? Object.keys(servers).length : 0;
+        const readyWithIps = servers && typeof servers === 'object'
+          ? Object.values(servers).filter((s: any) => s.public_ip && s.public_ip !== 'N/A').length
+          : 0;
+
+        if (servers && serverCount >= 16 && readyWithIps >= 16) {
+          stopAllIntervals();
+          setProvisionedServers(servers);
+          setSetupState('completed');
+          setIsSubmitting(false);
+          setSuccessMessage(`✅ Existing active lab detected! All ${serverCount} servers are ready.`);
+          return;
+        } else {
+          setSetupState('in_progress');
+          setLiveStatusText('Setting up your lab environment, please wait...');
+          return;
+        }
+      }
 
       // If backend returned immediate 200 with IN_PROGRESS: keep polling!
       if (data.status === 'IN_PROGRESS' || res.status === 200) {
-        const servers = data.data?.servers || data.servers;
         if (servers && typeof servers === 'object' && Object.keys(servers).length >= 16) {
           stopAllIntervals();
           setProvisionedServers(servers);
@@ -635,6 +673,14 @@ const handleGroupChange = (
         setSetupState('idle');
         setActiveLabId(null);
         removeLabId(formData.user_email || userEmail);
+        if (typeof window !== 'undefined') {
+          const key = targetLabId
+            ? `splunklab_cluster_config_build_${targetLabId}`
+            : (formData.user_email || userEmail
+            ? `splunklab_cluster_config_build_${(formData.user_email || userEmail).replace(/[^a-zA-Z0-9_-]/g, '_')}`
+            : 'splunklab_cluster_config_build_default');
+          localStorage.removeItem(key);
+        }
         setIsClusterConfigurationOpen(false);
         setIsDestroyModalOpen(false);
         setDestroyConfirmChecked(false);
@@ -1136,58 +1182,95 @@ const handleGroupChange = (
               </div>
 
               {/* Server List */}
-              <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
-                {Object.entries(provisionedServers).map(([srvName, srvInfo]) => {
-                  const pubIp =
-                    typeof srvInfo === 'object' && srvInfo
-                      ? srvInfo.public_ip || srvInfo.private_ip || ''
-                      : String(srvInfo || '');
-                  const srvRegion = typeof srvInfo === 'object' && srvInfo ? srvInfo.region : undefined;
-                  return (
-                    <div
-                      key={srvName}
-                      className="flex items-center justify-between bg-white p-3 rounded-lg border border-gray-200 text-xs shadow-xs hover:border-blue-300 transition-colors"
-                    >
-                      <div className="flex items-center gap-2 truncate max-w-[220px]">
-                        <span className="font-semibold text-gray-800 truncate" title={srvName}>
-                          {srvName}
-                        </span>
-                        {srvRegion && (
-                          <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 font-mono flex-shrink-0" title={`AWS Region: ${srvRegion}`}>
-                            {srvRegion}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="text-right">
-                          <code className="block text-blue-700 bg-blue-50 px-2 py-0.5 rounded font-mono text-[11px] font-medium">
-                            Public: {pubIp || 'N/A'}
-                          </code>
-                          <code className="block text-gray-600 bg-gray-50 px-2 py-0.5 rounded font-mono text-[11px]">
-                            Private: {typeof srvInfo === 'object' && srvInfo ? srvInfo.private_ip || 'N/A' : 'N/A'}
-                          </code>
-                        </div>
-                        {pubIp && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(pubIp);
-                              setCopiedKey(srvName);
-                              setTimeout(() => setCopiedKey(null), 2000);
-                            }}
-                            className={`text-[11px] px-2.5 py-1 rounded border transition-colors ${
-                              copiedKey === srvName
-                                ? 'bg-green-100 text-green-800 border-green-300 font-bold'
-                                : 'bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300'
-                            }`}
-                          >
-                            {copiedKey === srvName ? '✓ Copied' : 'Copy'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+              <div className="max-h-96 overflow-y-auto overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-2xs">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-200 text-gray-600 font-semibold text-[11px] uppercase tracking-wider">
+                    <tr>
+                      <th className="py-2.5 px-4 bg-gray-50/95 backdrop-blur-xs">Server</th>
+                      <th className="py-2.5 px-4 bg-gray-50/95 backdrop-blur-xs">Public IP</th>
+                      <th className="py-2.5 px-4 bg-gray-50/95 backdrop-blur-xs">Private IP</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {Object.entries(provisionedServers).map(([srvName, srvInfo]) => {
+                      const pubIp =
+                        typeof srvInfo === 'object' && srvInfo
+                          ? (srvInfo.public_ip && srvInfo.public_ip !== 'N/A' ? srvInfo.public_ip : '')
+                          : '';
+                      const privIp =
+                        typeof srvInfo === 'object' && srvInfo
+                          ? (srvInfo.private_ip && srvInfo.private_ip !== 'N/A' ? srvInfo.private_ip : '')
+                          : '';
+                      const srvRegion = typeof srvInfo === 'object' && srvInfo ? srvInfo.region : undefined;
+
+                      return (
+                        <tr key={srvName} className="hover:bg-blue-50/40 transition-colors">
+                          {/* Server Name & Region */}
+                          <td className="py-2.5 px-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <span className="font-semibold text-gray-900">{srvName}</span>
+                              {srvRegion && (
+                                <span className="text-[10px] bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded border border-purple-200 font-mono">
+                                  {srvRegion}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Public IP */}
+                          <td className="py-2.5 px-4 whitespace-nowrap">
+                            <div className="inline-flex items-center justify-between w-48 bg-blue-50/70 border border-blue-200/80 px-2.5 py-1 rounded-md">
+                              <code className="text-[11px] font-mono font-bold text-blue-700">
+                                {pubIp || 'N/A'}
+                              </code>
+                              {pubIp ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(`${srvName}:pub`, pubIp)}
+                                  className={`w-14 text-center text-[10px] py-0.5 rounded font-medium transition border ${
+                                    copiedKey === `${srvName}:pub`
+                                      ? 'bg-green-600 text-white border-green-600 font-bold'
+                                      : 'bg-white hover:bg-blue-100 text-blue-800 border-blue-300 shadow-2xs'
+                                  }`}
+                                  title="Copy Public IP"
+                                >
+                                  {copiedKey === `${srvName}:pub` ? '✓ Copied' : 'Copy'}
+                                </button>
+                              ) : (
+                                <span className="w-14" />
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Private IP */}
+                          <td className="py-2.5 px-4 whitespace-nowrap">
+                            <div className="inline-flex items-center justify-between w-48 bg-gray-50 border border-gray-200 px-2.5 py-1 rounded-md">
+                              <code className="text-[11px] font-mono font-medium text-gray-800">
+                                {privIp || 'N/A'}
+                              </code>
+                              {privIp ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopy(`${srvName}:priv`, privIp)}
+                                  className={`w-14 text-center text-[10px] py-0.5 rounded font-medium transition border ${
+                                    copiedKey === `${srvName}:priv`
+                                      ? 'bg-green-600 text-white border-green-600 font-bold'
+                                      : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-300 shadow-2xs'
+                                  }`}
+                                  title="Copy Private IP"
+                                >
+                                  {copiedKey === `${srvName}:priv` ? '✓ Copied' : 'Copy'}
+                                </button>
+                              ) : (
+                                <span className="w-14" />
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
 
               {/* Terminate Button - ONLY under public and private IPs */}
@@ -1239,6 +1322,7 @@ const handleGroupChange = (
           provisionedServers={provisionedServers}
           hideAuth={true}
           userEmail={formData.user_email || userEmail}
+          labId={activeLabId}
         />
       )}
 
